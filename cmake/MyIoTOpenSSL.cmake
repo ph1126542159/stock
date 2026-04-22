@@ -1,0 +1,20 @@
+include_guard(GLOBAL)
+
+find_package(OpenSSL REQUIRED)
+
+if(WIN32)
+    get_filename_component(MYIOT_OPENSSL_ROOT "${OPENSSL_INCLUDE_DIR}" DIRECTORY)
+    set(MYIOT_OPENSSL_BIN_DIR "${MYIOT_OPENSSL_ROOT}/bin")
+    file(GLOB MYIOT_OPENSSL_RUNTIME_DLLS
+        "${MYIOT_OPENSSL_ROOT}/libcrypto*.dll"
+        "${MYIOT_OPENSSL_ROOT}/libssl*.dll"
+        "${MYIOT_OPENSSL_BIN_DIR}/libcrypto*.dll"
+        "${MYIOT_OPENSSL_BIN_DIR}/libssl*.dll"
+    )
+    list(REMOVE_DUPLICATES MYIOT_OPENSSL_RUNTIME_DLLS)
+    set(MYIOT_OPENSSL_LEGACY_PROVIDER "${MYIOT_OPENSSL_BIN_DIR}/legacy.dll")
+    set(MYIOT_OPENSSL_CONFIG_FILE "${MYIOT_OPENSSL_BIN_DIR}/cnf/openssl.cnf")
+    set(MYIOT_OPENSSL_RUNTIME_DLLS "${MYIOT_OPENSSL_RUNTIME_DLLS}" CACHE INTERNAL "OpenSSL runtime DLLs for Windows")
+    set(MYIOT_OPENSSL_LEGACY_PROVIDER "${MYIOT_OPENSSL_LEGACY_PROVIDER}" CACHE INTERNAL "OpenSSL legacy provider DLL for Windows")
+    set(MYIOT_OPENSSL_CONFIG_FILE "${MYIOT_OPENSSL_CONFIG_FILE}" CACHE INTERNAL "OpenSSL config file for Windows")
+endif()

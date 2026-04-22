@@ -1,0 +1,23 @@
+#
+# Runtime overrides for macchina.properties.
+# Copy this file to settings.properties in the runtime directory when needed.
+#
+
+# Enable OTLP export.
+telemetry.export.enabled = true
+
+# OTLP/HTTP collector endpoint.
+telemetry.export.otlp.endpoint = http://192.168.238.129:4318
+
+# Optional per-signal paths when the collector uses non-default routes.
+telemetry.export.otlp.tracesPath = /v1/traces
+telemetry.export.otlp.logsPath = /v1/logs
+telemetry.export.otlp.metricsPath = /v1/metrics
+
+# Optional request headers, separated by semicolons.
+# telemetry.export.otlp.headers = Authorization=Bearer token;X-Tenant=myiot
+
+# Export tuning.
+telemetry.export.otlp.timeout = 1000
+telemetry.export.otlp.scheduleDelay = 1000
+telemetry.export.metrics.interval = 3000
