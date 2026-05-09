@@ -1598,506 +1598,327 @@ ApplicationWindow {
             anchors.margins: 12
             currentIndex: marketBoardController.currentPage
 
+            // Single-page vertical overview: ditches the previous 11-tab
+            // StackLayout in favour of a left sidebar (clickable section
+            // index) + right ScrollView with stacked sections. This avoids
+            // the 0x0 sizing trap that StackLayout-children-without-Layout
+            // hit, and gives the user every section's data on one scroll
+            // surface.
             Item {
-                ColumnLayout {
+                id: overviewRoot
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                function scrollToIndex(idx) {
+                    const targets = [sec_institutions, sec_usWatch, sec_indices, sec_flow, sec_rotation, sec_valuation, sec_earnings, sec_fund, sec_risk, sec_diag, sec_plans]
+                    const t = targets[idx]
+                    if (!t) return
+                    overviewScroll.contentItem.contentY = Math.max(0, t.y - 8)
+                }
+
+                RowLayout {
                     anchors.fill: parent
-                    spacing: 14
+                    spacing: 12
 
+                    // Left sticky section index
                     Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 92
-                        radius: 10
-                        color: theme.panelRaised
-                        border.color: theme.border
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 18
-                            anchors.rightMargin: 18
-                            spacing: 12
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: localizationController.trCn(marketBoardController.institutionBoardTitle)
-                                    color: theme.text
-                                    font.family: "Segoe UI Variable"
-                                    font.pixelSize: 28
-                                    font.bold: true
-                                    elide: Text.ElideRight
-                                }
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: localizationController.tr("mb.help.intro")
-                                    color: theme.muted
-                                    font.family: "Segoe UI Variable"
-                                    font.pixelSize: 14
-                                    elide: Text.ElideRight
-                                }
-                            }
-
-                            Rectangle {
-                                radius: 8
-                                color: theme.accentSoft
-                                border.color: theme.accent
-                                implicitWidth: 132
-                                implicitHeight: 40
-
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: localizationController.tr("mb.label.liveSync")
-                                    color: theme.accent
-                                    font.family: "Segoe UI Variable"
-                                    font.pixelSize: 15
-                                    font.bold: true
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 124
+                        Layout.preferredWidth: 168
+                        Layout.fillHeight: true
                         radius: 10
                         color: theme.panel
                         border.color: theme.border
 
-                        GridLayout {
-                            id: institutionTabs
-                            property int currentIndex: 0
+                        ColumnLayout {
+                            id: sectionIndex
                             anchors.fill: parent
-                            anchors.margins: 8
-                            columns: 6
-                            rowSpacing: 8
-                            columnSpacing: 8
+                            anchors.margins: 14
+                            spacing: 4
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: localizationController.trCn(marketBoardController.institutionBoardTitle)
+                                color: theme.text
+                                font.family: "Microsoft YaHei UI"
+                                font.pixelSize: 18
+                                font.bold: true
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: localizationController.tr("mb.help.intro")
+                                color: theme.muted
+                                font.family: "Microsoft YaHei UI"
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
+                                Layout.bottomMargin: 6
+                            }
 
                             Repeater {
                                 model: window.marketBoardPages
 
                                 Rectangle {
+                                    id: indexEntry
+                                    required property var modelData
+                                    required property int index
                                     Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    Layout.preferredHeight: 48
-                                    radius: 10
-                                    color: institutionTabs.currentIndex === index ? modelData.bg : modelData.soft
+                                    Layout.preferredHeight: 36
+                                    radius: 6
+                                    color: indexMouse.containsMouse ? Qt.rgba(modelData.color.r, modelData.color.g, modelData.color.b, 0.18) : modelData.soft
                                     border.color: modelData.color
-                                    border.width: institutionTabs.currentIndex === index ? 2 : 1
-                                    opacity: institutionTabs.currentIndex === index ? 1.0 : 0.82
+                                    border.width: 1
 
                                     Text {
-                                        anchors.centerIn: parent
-                                        anchors.leftMargin: 8
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 10
                                         anchors.rightMargin: 8
-                                        text: localizationController.tr(modelData.key)
-                                        color: institutionTabs.currentIndex === index ? modelData.color : theme.text
-                                        font.family: "Segoe UI Variable"
-                                        font.pixelSize: 16
-                                        font.bold: true
-                                        horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
+                                        text: (indexEntry.index + 1) + ". " + localizationController.tr(indexEntry.modelData.key)
+                                        color: indexEntry.modelData.color
+                                        font.family: "Microsoft YaHei UI"
+                                        font.pixelSize: 13
+                                        font.bold: true
                                         elide: Text.ElideRight
                                     }
 
                                     MouseArea {
+                                        id: indexMouse
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: institutionTabs.currentIndex = index
-                                        onEntered: parent.opacity = 1.0
-                                        onExited: parent.opacity = institutionTabs.currentIndex === index ? 1.0 : 0.82
+                                        onClicked: overviewRoot.scrollToIndex(indexEntry.index)
                                     }
                                 }
                             }
+
+                            Item { Layout.fillHeight: true }
                         }
                     }
 
-                    StackLayout {
+                    // Right scrolling content
+                    ScrollView {
+                        id: overviewScroll
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        currentIndex: institutionTabs.currentIndex
+                        clip: true
+                        contentWidth: overviewCol.width
+                        ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                        Item {
-                            BoardTableCard {
-                                anchors.fill: parent
-                                boardModel: institutionRankingModel
-                                columnRatios: [0.08, 0.16, 0.18, 0.24, 0.22, 0.12]
-                                minimumBodyWidth: 960
-                                titleText: localizationController.tr("mb.section.institutions")
-                                subtitleText: localizationController.tr("mb.section.institutions.subtitle")
-                                statusText: localizationController.trCn(marketBoardController.institutionStatus)
-                                actionHint: localizationController.tr("mb.action.update.1h")
-                                selectedRow: window.selectedInstitutionRow
+                        ColumnLayout {
+                            id: overviewCol
+                            width: overviewScroll.width - 16
+                            spacing: 14
 
-                                onRowSelected: function(row) {
-                                    window.selectedInstitutionRow = row
-                                }
+                            // ── Section 1. 国内机构榜 ──
+                            Item {
+                                id: sec_institutions
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 480
 
-                                onRowActivated: function(row) {
-                                    window.openValueBoard(row)
+                                BoardTableCard {
+                                    anchors.fill: parent
+                                    boardModel: institutionRankingModel
+                                    columnRatios: [0.08, 0.16, 0.18, 0.24, 0.22, 0.12]
+                                    minimumBodyWidth: 880
+                                    titleText: "1. " + localizationController.tr("mb.section.institutions")
+                                    subtitleText: localizationController.tr("mb.section.institutions.subtitle")
+                                    statusText: localizationController.trCn(marketBoardController.institutionStatus)
+                                    actionHint: localizationController.tr("mb.action.update.1h")
+                                    selectedRow: window.selectedInstitutionRow
+                                    onRowSelected: function(row) { window.selectedInstitutionRow = row }
+                                    onRowActivated: function(row) { window.openValueBoard(row) }
                                 }
                             }
-                        }
 
-                        Item {
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 10
-                                color: theme.panel
-                                border.color: theme.border
+                            // ── Section 2. 美股观察 ──
+                            Item {
+                                id: sec_usWatch
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
 
-                                ColumnLayout {
+                                Rectangle {
                                     anchors.fill: parent
-                                    anchors.margins: 16
-                                    spacing: 14
+                                    radius: 10
+                                    color: theme.panel
+                                    border.color: theme.border
 
-                                    RowLayout {
-                                        Layout.fillWidth: true
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 16
                                         spacing: 12
 
-                                        ColumnLayout {
+                                        RowLayout {
                                             Layout.fillWidth: true
-                                            spacing: 4
+                                            spacing: 12
 
-                                            Text {
-                                                text: localizationController.tr("mb.label.usWatch")
-                                                color: theme.text
-                                                font.family: "Segoe UI Variable"
-                                                font.pixelSize: 24
-                                                font.bold: true
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 4
+                                                Text {
+                                                    text: "2. " + localizationController.tr("mb.section.usWatch")
+                                                    color: theme.text
+                                                    font.family: "Microsoft YaHei UI"
+                                                    font.pixelSize: 22
+                                                    font.bold: true
+                                                }
+                                                Text {
+                                                    text: localizationController.trCn(marketBoardController.usMarketStatus)
+                                                    color: theme.muted
+                                                    font.family: "Microsoft YaHei UI"
+                                                    font.pixelSize: 13
+                                                    wrapMode: Text.Wrap
+                                                }
                                             }
-
-                                            Text {
-                                                text: localizationController.trCn(marketBoardController.usMarketStatus)
-                                                color: theme.muted
-                                                font.family: "Segoe UI Variable"
+                                            TextField {
+                                                id: usSymbolInputV2
+                                                Layout.preferredWidth: 240
+                                                placeholderText: "AAPL / Apple / 纳指"
+                                                font.family: "Microsoft YaHei UI"
                                                 font.pixelSize: 14
-                                                wrapMode: Text.Wrap
+                                                color: theme.text
+                                                selectByMouse: true
+                                                onAccepted: { if (marketBoardController.addUsWatchSymbol(text)) clear() }
+                                                background: Rectangle { radius: 8; color: theme.background; border.color: usSymbolInputV2.activeFocus ? theme.accent : theme.border }
+                                            }
+                                            Button {
+                                                id: addUsBtnV2
+                                                text: localizationController.tr("mb.action.add")
+                                                implicitWidth: 72
+                                                implicitHeight: 36
+                                                onClicked: { if (marketBoardController.addUsWatchSymbol(usSymbolInputV2.text)) usSymbolInputV2.clear() }
+                                                background: Rectangle { radius: 8; color: addUsBtnV2.down ? "#1f5d82" : theme.accentSoft; border.color: theme.accent }
+                                                contentItem: Text { text: addUsBtnV2.text; color: theme.accent; font.family: "Microsoft YaHei UI"; font.pixelSize: 13; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                             }
                                         }
 
-                                        TextField {
-                                            id: usSymbolInput
-                                            Layout.preferredWidth: 280
-                                            Layout.minimumWidth: 180
-                                            placeholderText: "输入代码或名称，例如 AAPL / Apple / 纳指"
-                                            font.family: "Segoe UI Variable"
-                                            font.pixelSize: 16
-                                            color: theme.text
-                                            selectByMouse: true
-                                            onAccepted: {
-                                                if (marketBoardController.addUsWatchSymbol(text)) {
-                                                    clear()
-                                                }
-                                            }
-
-                                            background: Rectangle {
-                                                radius: 16
-                                                color: theme.background
-                                                border.color: usSymbolInput.activeFocus ? theme.accent : theme.border
-                                            }
+                                        BoardTableCard {
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            boardModel: usMarketModel
+                                            columnRatios: [0.13, 0.22, 0.17, 0.13, 0.14, 0.21]
+                                            minimumBodyWidth: 880
+                                            chartColumn: 5
+                                            titleText: ""
+                                            subtitleText: localizationController.tr("mb.section.usWatch.subtitle")
+                                            statusText: ""
+                                            actionHint: localizationController.tr("mb.action.realtime")
+                                            selectedRow: -1
+                                            onRowSelected: function(row) { }
+                                            onRowActivated: function(row) { }
                                         }
-
-                                        Button {
-                                            id: addUsButton
-                                            text: localizationController.tr("mb.action.add")
-                                            implicitWidth: 86
-                                            implicitHeight: 48
-                                            font.family: "Segoe UI Variable"
-                                            font.pixelSize: 17
-                                            font.bold: true
-                                            onClicked: {
-                                                if (marketBoardController.addUsWatchSymbol(usSymbolInput.text)) {
-                                                    usSymbolInput.clear()
-                                                }
-                                            }
-
-                                            background: Rectangle {
-                                                radius: 16
-                                                color: theme.accentSoft
-                                                border.color: theme.accent
-                                            }
-
-                                            contentItem: Text {
-                                                text: addUsButton.text
-                                                color: theme.accent
-                                                font: addUsButton.font
-                                                horizontalAlignment: Text.AlignHCenter
-                                                verticalAlignment: Text.AlignVCenter
-                                            }
-                                        }
-                                    }
-
-                                    BoardTableCard {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                        boardModel: usMarketModel
-                                        columnRatios: [0.13, 0.22, 0.17, 0.13, 0.14, 0.21]
-                                        minimumBodyWidth: 1180
-                                        chartColumn: 5
-                                        titleText: localizationController.tr("mb.section.usWatch")
-                                        subtitleText: localizationController.tr("mb.section.usWatch.subtitle")
-                                        statusText: localizationController.trCn(marketBoardController.usMarketStatus)
-                                        actionHint: localizationController.tr("mb.action.realtime")
-                                        selectedRow: -1
-                                        onRowSelected: function(row) { }
-                                        onRowActivated: function(row) { }
                                     }
                                 }
                             }
-                        }
 
-                        Item {
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 10
-                                color: theme.panel
-                                border.color: theme.border
+                            // ── Section 3. 大盘行情 ──
+                            Item {
+                                id: sec_indices
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: indexGrid.implicitHeight + 80
 
-                                ColumnLayout {
+                                Rectangle {
                                     anchors.fill: parent
-                                    anchors.margins: 16
-                                    spacing: 14
+                                    radius: 10
+                                    color: theme.panel
+                                    border.color: theme.border
 
-                                    RowLayout {
-                                        Layout.fillWidth: true
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 16
                                         spacing: 12
 
-                                        ColumnLayout {
+                                        RowLayout {
                                             Layout.fillWidth: true
-                                            spacing: 4
-
+                                            spacing: 8
                                             Text {
                                                 Layout.fillWidth: true
-                                                text: localizationController.tr("mb.label.indices")
+                                                text: "3. " + localizationController.tr("mb.label.indices")
                                                 color: theme.text
-                                                font.family: "Segoe UI Variable"
-                                                font.pixelSize: 24
+                                                font.family: "Microsoft YaHei UI"
+                                                font.pixelSize: 22
                                                 font.bold: true
-                                                elide: Text.ElideRight
                                             }
-
                                             Text {
-                                                Layout.fillWidth: true
                                                 text: domesticIndexStatus
                                                 color: theme.muted
-                                                font.family: "Segoe UI Variable"
-                                                font.pixelSize: 14
-                                                elide: Text.ElideRight
+                                                font.family: "Microsoft YaHei UI"
+                                                font.pixelSize: 13
                                             }
                                         }
 
-                                        Rectangle {
-                                            Layout.preferredWidth: 132
-                                            Layout.preferredHeight: 40
-                                            radius: 8
-                                            color: theme.accentSoft
-                                            border.color: theme.accent
+                                        GridLayout {
+                                            id: indexGrid
+                                            Layout.fillWidth: true
+                                            columns: overviewScroll.width >= 1100 ? 4 : (overviewScroll.width >= 820 ? 3 : 2)
+                                            rowSpacing: 10
+                                            columnSpacing: 10
 
-                                            Text {
-                                                anchors.centerIn: parent
-                                                text: localizationController.tr("mb.label.realQuotes")
-                                                color: theme.accent
-                                                font.family: "Segoe UI Variable"
-                                                font.pixelSize: 15
-                                                font.bold: true
-                                            }
-                                        }
-                                    }
+                                            Repeater {
+                                                model: window.domesticIndexRows
 
-                                    GridLayout {
-                                        Layout.fillWidth: true
-                                        Layout.fillHeight: true
-                                        columns: 4
-                                        rowSpacing: 12
-                                        columnSpacing: 12
+                                                Rectangle {
+                                                    id: idxCard
+                                                    required property var modelData
+                                                    Layout.fillWidth: true
+                                                    Layout.preferredHeight: 220
+                                                    radius: 10
+                                                    color: theme.panelRaised
+                                                    border.color: theme.border
+                                                    clip: true
 
-                                        Repeater {
-                                            model: window.domesticIndexRows
+                                                    ColumnLayout {
+                                                        anchors.fill: parent
+                                                        anchors.margins: 12
+                                                        spacing: 6
 
-                                            Rectangle {
-                                                id: indexCard
-                                                property var indexRow: modelData
-
-                                                Layout.fillWidth: true
-                                                Layout.preferredHeight: 262
-                                                Layout.minimumHeight: 246
-                                                Layout.maximumHeight: 280
-                                                radius: 10
-                                                color: theme.panelRaised
-                                                border.color: theme.border
-                                                clip: true
-
-                                                ColumnLayout {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 14
-                                                    spacing: 8
-
-                                                    RowLayout {
-                                                        Layout.fillWidth: true
-                                                        spacing: 8
-
-                                                        ColumnLayout {
+                                                        RowLayout {
                                                             Layout.fillWidth: true
-                                                            spacing: 2
-
-                                                            Text {
+                                                            spacing: 6
+                                                            ColumnLayout {
                                                                 Layout.fillWidth: true
-                                                                text: modelData.name
-                                                                color: theme.text
-                                                                font.family: "Segoe UI Variable"
-                                                                font.pixelSize: 20
-                                                                font.bold: true
-                                                                elide: Text.ElideRight
+                                                                spacing: 1
+                                                                Text { text: idxCard.modelData.name; color: theme.text; font.family: "Microsoft YaHei UI"; font.pixelSize: 18; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+                                                                Text { text: idxCard.modelData.code; color: theme.muted; font.family: "Consolas"; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
                                                             }
-
-                                                            Text {
-                                                                Layout.fillWidth: true
-                                                                text: modelData.code
-                                                                color: theme.muted
-                                                                font.family: "Consolas"
-                                                                font.pixelSize: 12
-                                                                elide: Text.ElideRight
-                                                            }
-                                                        }
-
-                                                        Rectangle {
-                                                            Layout.preferredWidth: 82
-                                                            Layout.preferredHeight: 28
-                                                            radius: 7
-                                                            color: modelData.change >= 0
-                                                                ? Qt.rgba(theme.positive.r, theme.positive.g, theme.positive.b, 0.13)
-                                                                : Qt.rgba(theme.negative.r, theme.negative.g, theme.negative.b, 0.13)
-                                                            border.color: modelData.change >= 0 ? theme.positive : theme.negative
-
-                                                            Text {
-                                                                anchors.centerIn: parent
-                                                                text: (modelData.change >= 0 ? "+" : "") + Number(modelData.change).toFixed(2) + "%"
-                                                                color: modelData.change >= 0 ? theme.positive : theme.negative
-                                                                font.family: "Segoe UI Variable"
-                                                                font.pixelSize: 13
-                                                                font.bold: true
-                                                            }
-                                                        }
-                                                    }
-
-                                                    RowLayout {
-                                                        Layout.fillWidth: true
-                                                        spacing: 10
-
-                                                        Text {
-                                                            Layout.fillWidth: true
-                                                            text: modelData.value
-                                                            color: theme.text
-                                                            font.family: "Segoe UI Variable"
-                                                            font.pixelSize: 28
-                                                            font.bold: true
-                                                            elide: Text.ElideRight
-                                                        }
-
-                                                        Text {
-                                                            text: modelData.tone
-                                                            color: theme.accent
-                                                            font.family: "Segoe UI Variable"
-                                                            font.pixelSize: 13
-                                                            font.bold: true
-                                                        }
-                                                    }
-
-                                                    Sparkline {
-                                                        Layout.fillWidth: true
-                                                        Layout.preferredHeight: 44
-                                                        series: modelData.series
-                                                        positive: modelData.change >= 0
-                                                    }
-
-                                                    GridLayout {
-                                                        Layout.fillWidth: true
-                                                        columns: 3
-                                                        rowSpacing: 8
-                                                        columnSpacing: 8
-
-                                                        Repeater {
-                                                            model: [
-                                                                { label: "宽度", value: indexCard.indexRow.breadth + "%", color: window.metricColor(indexCard.indexRow.breadth, 58, 42) },
-                                                                { label: "动量", value: (indexCard.indexRow.momentum || 55), color: window.metricColor(indexCard.indexRow.momentum || 55, 62, 40) },
-                                                                { label: "量能", value: (indexCard.indexRow.turnover || 100) + "%", color: window.metricColor(indexCard.indexRow.turnover || 100, 110, 75) },
-                                                                { label: "支撑", value: indexCard.indexRow.support || "-", color: theme.muted },
-                                                                { label: "压力", value: indexCard.indexRow.resistance || "-", color: theme.muted },
-                                                                { label: "风险", value: indexCard.indexRow.risk || window.indexRiskLabel(indexCard.indexRow.change, indexCard.indexRow.breadth), color: indexCard.indexRow.risk === "偏高" || indexCard.indexRow.risk === "追高" ? theme.negative : theme.positive }
-                                                            ]
-
                                                             Rectangle {
-                                                                Layout.fillWidth: true
-                                                                Layout.preferredHeight: 42
-                                                                radius: 8
-                                                                color: theme.background
-                                                                border.color: theme.border
-
-                                                                ColumnLayout {
-                                                                    anchors.fill: parent
-                                                                    anchors.leftMargin: 8
-                                                                    anchors.rightMargin: 8
-                                                                    anchors.topMargin: 5
-                                                                    anchors.bottomMargin: 5
-                                                                    spacing: 0
-
-                                                                    Text {
-                                                                        Layout.fillWidth: true
-                                                                        text: modelData.label
-                                                                        color: theme.muted
-                                                                        font.family: "Segoe UI Variable"
-                                                                        font.pixelSize: 10
-                                                                        elide: Text.ElideRight
-                                                                    }
-
-                                                                    Text {
-                                                                        Layout.fillWidth: true
-                                                                        text: modelData.value
-                                                                        color: modelData.color
-                                                                        font.family: "Segoe UI Variable"
-                                                                        font.pixelSize: 13
-                                                                        font.bold: true
-                                                                        elide: Text.ElideRight
-                                                                    }
+                                                                Layout.preferredWidth: 78
+                                                                Layout.preferredHeight: 26
+                                                                radius: 6
+                                                                color: idxCard.modelData.change >= 0 ? Qt.rgba(theme.positive.r, theme.positive.g, theme.positive.b, 0.15) : Qt.rgba(theme.negative.r, theme.negative.g, theme.negative.b, 0.15)
+                                                                border.color: idxCard.modelData.change >= 0 ? theme.positive : theme.negative
+                                                                Text {
+                                                                    anchors.centerIn: parent
+                                                                    text: (idxCard.modelData.change >= 0 ? "+" : "") + Number(idxCard.modelData.change).toFixed(2) + "%"
+                                                                    color: idxCard.modelData.change >= 0 ? theme.positive : theme.negative
+                                                                    font.family: "Microsoft YaHei UI"; font.pixelSize: 12; font.bold: true
                                                                 }
                                                             }
                                                         }
-                                                    }
-
-                                                    Rectangle {
-                                                        Layout.fillWidth: true
-                                                        Layout.preferredHeight: 30
-                                                        radius: 8
-                                                        color: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.10)
-                                                        border.color: theme.accent
 
                                                         Text {
-                                                            anchors.fill: parent
-                                                            anchors.leftMargin: 10
-                                                            anchors.rightMargin: 10
-                                                            text: (modelData.tomorrow || window.tomorrowBias(modelData.change, modelData.breadth, modelData.momentum || 55)) + " / " + modelData.note
-                                                            color: theme.accent
-                                                            font.family: "Segoe UI Variable"
-                                                            font.pixelSize: 12
+                                                            Layout.fillWidth: true
+                                                            text: idxCard.modelData.value
+                                                            color: theme.text
+                                                            font.family: "Microsoft YaHei UI"
+                                                            font.pixelSize: 26
                                                             font.bold: true
-                                                            verticalAlignment: Text.AlignVCenter
                                                             elide: Text.ElideRight
                                                         }
-                                                    }
 
-                                                    Text {
-                                                        Layout.fillWidth: true
-                                                        text: localizationController.tr("mb.help.disclaimer")
-                                                        color: theme.muted
-                                                        font.family: "Segoe UI Variable"
-                                                        font.pixelSize: 11
-                                                        wrapMode: Text.NoWrap
-                                                        maximumLineCount: 1
-                                                        elide: Text.ElideRight
+                                                        Sparkline {
+                                                            Layout.fillWidth: true
+                                                            Layout.preferredHeight: 38
+                                                            series: idxCard.modelData.series
+                                                            positive: idxCard.modelData.change >= 0
+                                                        }
+
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 4
+                                                            Text { text: "宽度 " + (idxCard.modelData.breadth || 0) + "%"; color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 11; Layout.fillWidth: true }
+                                                            Text { text: "动量 " + (idxCard.modelData.momentum || "-"); color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 11; Layout.fillWidth: true }
+                                                            Text { text: idxCard.modelData.tone || "观察"; color: theme.accent; font.family: "Microsoft YaHei UI"; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2105,76 +1926,74 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                        }
 
-                        // Each StackLayout child must request fillWidth/fillHeight
-                        // explicitly, otherwise the Item wrapper collapses to a
-                        // 0x0 size and the ReferencePage anchored inside it
-                        // never renders -- which is exactly why tabs 资金流向 /
-                        // 行业轮动 / 估值温度 / 财报日历 / 基金穿透 / 风险预警 /
-                        // 组合诊断 / 交易计划 looked completely blank.
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.flow")
-                            subtitleText: localizationController.tr("mb.section.flow.subtitle")
-                            rows: window.capitalFlowRows
-                        }
+                            // ── Section 4-11. ReferencePages ──
+                            ReferencePage {
+                                id: sec_flow
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "4. " + localizationController.tr("mb.section.flow")
+                                subtitleText: localizationController.tr("mb.section.flow.subtitle")
+                                rows: window.capitalFlowRows
+                            }
+                            ReferencePage {
+                                id: sec_rotation
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "5. " + localizationController.tr("mb.section.rotation")
+                                subtitleText: localizationController.tr("mb.section.rotation.subtitle")
+                                rows: window.rotationRows
+                            }
+                            ReferencePage {
+                                id: sec_valuation
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "6. " + localizationController.tr("mb.section.valuation")
+                                subtitleText: localizationController.tr("mb.section.valuation.subtitle")
+                                rows: window.valuationRows
+                            }
+                            ReferencePage {
+                                id: sec_earnings
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "7. " + localizationController.tr("mb.section.earnings")
+                                subtitleText: localizationController.tr("mb.section.earnings.subtitle")
+                                rows: window.earningsRows
+                            }
+                            ReferencePage {
+                                id: sec_fund
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "8. " + localizationController.tr("mb.section.fund")
+                                subtitleText: localizationController.tr("mb.section.fund.subtitle")
+                                rows: window.fundLookthroughRows
+                            }
+                            ReferencePage {
+                                id: sec_risk
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "9. " + localizationController.tr("mb.section.risk")
+                                subtitleText: localizationController.tr("mb.section.risk.subtitle")
+                                rows: window.riskAlertRows
+                            }
+                            ReferencePage {
+                                id: sec_diag
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "10. " + localizationController.tr("mb.section.diag")
+                                subtitleText: localizationController.tr("mb.section.diag.subtitle")
+                                rows: window.portfolioDiagnosticRows
+                            }
+                            ReferencePage {
+                                id: sec_plans
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 540
+                                titleText: "11. " + localizationController.tr("mb.section.plans")
+                                subtitleText: localizationController.tr("mb.section.plans.subtitle")
+                                rows: window.tradePlanRows
+                            }
 
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.rotation")
-                            subtitleText: localizationController.tr("mb.section.rotation.subtitle")
-                            rows: window.rotationRows
-                        }
-
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.valuation")
-                            subtitleText: localizationController.tr("mb.section.valuation.subtitle")
-                            rows: window.valuationRows
-                        }
-
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.earnings")
-                            subtitleText: localizationController.tr("mb.section.earnings.subtitle")
-                            rows: window.earningsRows
-                        }
-
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.fund")
-                            subtitleText: localizationController.tr("mb.section.fund.subtitle")
-                            rows: window.fundLookthroughRows
-                        }
-
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.risk")
-                            subtitleText: localizationController.tr("mb.section.risk.subtitle")
-                            rows: window.riskAlertRows
-                        }
-
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.diag")
-                            subtitleText: localizationController.tr("mb.section.diag.subtitle")
-                            rows: window.portfolioDiagnosticRows
-                        }
-
-                        ReferencePage {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            titleText: localizationController.tr("mb.section.plans")
-                            subtitleText: localizationController.tr("mb.section.plans.subtitle")
-                            rows: window.tradePlanRows
+                            Item { Layout.fillWidth: true; Layout.preferredHeight: 8 }
                         }
                     }
                 }
