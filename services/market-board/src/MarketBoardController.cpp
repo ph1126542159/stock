@@ -791,6 +791,13 @@ QString MarketBoardController::marketOverviewStatus() const
 
 void MarketBoardController::refreshMarketOverview()
 {
+    telemetry_.logger().information(
+        QStringLiteral("refreshMarketOverview called: inFlight=%1 cmd=%2 script=%3 exists=%4")
+            .arg(marketOverviewRequestInFlight_)
+            .arg(valueBoardProviderCommand_)
+            .arg(marketOverviewScriptPath_)
+            .arg(QFileInfo::exists(marketOverviewScriptPath_))
+            .toStdString());
     if (marketOverviewRequestInFlight_) return;
     if (valueBoardProviderCommand_.isEmpty() || marketOverviewScriptPath_.isEmpty()) return;
     if (!QFileInfo::exists(marketOverviewScriptPath_)) return;
@@ -810,7 +817,17 @@ void MarketBoardController::refreshMarketOverview()
     process->setProcessChannelMode(QProcess::SeparateChannels);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert("PYTHONIOENCODING", "utf-8");
+    // Suppress tqdm + akshare progress bars on stderr; they fill the
+    // QProcess pipe buffer and can wedge the child waiting on stderr write,
+    // which is why the QProcess::finished signal never arrived.
+    env.insert("TQDM_DISABLE", "1");
+    env.insert("AKSHARE_QUIET", "1");
     process->setProcessEnvironment(env);
+
+    // Drain stderr continuously so it can't block the child even when tqdm
+    // is enabled by some sub-dependency.
+    connect(process, &QProcess::readyReadStandardError, process,
+        [process]() { process->readAllStandardError(); });
 
     QPointer<MarketBoardController> guard(this);
     connect(process, &QProcess::finished, this,
@@ -820,6 +837,11 @@ void MarketBoardController::refreshMarketOverview()
         const QString err = QString::fromUtf8(process->readAllStandardError());
         process->deleteLater();
         if (!guard) return;
+
+        telemetry_.logger().information(
+            QStringLiteral("marketOverview finished: exit=%1 out_bytes=%2 err_bytes=%3")
+                .arg(exitCode).arg(out.size()).arg(err.size())
+                .toStdString());
 
         marketOverviewRequestInFlight_ = false;
         if (exitCode != 0)
@@ -896,22 +918,33 @@ void MarketBoardController::start()
 
     // Auto-bootstrap a default selection so all dependent ReferencePage tabs
     // (Capital Flow / Valuation / Earnings / Fund Look-through / Risk /
-    // Diagnostics / Trade Plans) have non-empty data on first paint instead
-    // of waiting for the user to manually drill in via the institution
-    // double-click flow. We pick row 0 (招商银行财富 by current ordering)
-    // and prime its valuation board, which in turn fires
-    // setSelectedAsset(funds[0]) -> selectedAssetChanged -> QML rebuild.
+    // Diagnostics / Trade Plans) have non-empty data on first paint without
+    // ever leaving the overview surface. We do NOT call openValueBoard here
+    // because that would flip currentPage_ to ValueBoardPage and the user
+    // would land on the value board instead of the overview on every launch.
     QTimer::singleShot(0, this, [this]()
     {
         if (selectedInstitutionId_.isEmpty() && institutionModel_.rowCount() > 0)
         {
-            openValueBoard(0);
-            // Drop the user back on the institution-board page so the very
-            // first thing they see is still the entry point, but the
-            // downstream tabs are no longer empty.
-            currentPage_ = InstitutionBoardPage;
-            emit currentPageChanged();
+            const InstitutionBoardEntry* entry = institutionModel_.entryAt(0);
+            if (entry)
+            {
+                selectedInstitutionId_ = entry->id;
+                selectedInstitutionName_ = entry->name;
+                emit selectedInstitutionChanged();
+                loadValueBoard(selectedInstitutionId_);
+                if (!valueLoadedFromStorage_ ||
+                    shouldRefresh(valueUpdatedAt_, valueRefreshIntervalMs_))
+                {
+                    refreshValueBoard();
+                }
+                // currentPage_ stays at InstitutionBoardPage. The overview
+                // page remains the landing surface; users still drill into
+                // the value board explicitly by double-clicking a row.
+            }
         }
+        currentPage_ = InstitutionBoardPage;
+        emit currentPageChanged();
     });
 }
 

@@ -25,12 +25,27 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import re
 import sys
 import time
 import traceback
 import urllib.parse
 import urllib.request
+
+# Suppress tqdm progress bars on stderr -- when this script is launched as
+# a QProcess child the parent's stderr pipe can fill up and block akshare
+# mid-fetch. Setting TQDM_DISABLE alone isn't enough on some versions; also
+# monkey-patch tqdm to a no-op once the module loads.
+os.environ.setdefault("TQDM_DISABLE", "1")
+try:
+    import tqdm  # type: ignore
+    def _silent_tqdm(iterable=None, *args, **kwargs):
+        return iterable if iterable is not None else iter(())
+    tqdm.tqdm = _silent_tqdm  # type: ignore
+    tqdm.trange = lambda *a, **kw: range(*a)  # type: ignore
+except Exception:
+    pass
 
 
 def _safe_float(value, default: float = 0.0) -> float:
