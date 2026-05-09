@@ -260,15 +260,25 @@ ApplicationWindow {
                 }
             }
 
-            ColumnLayout {
+            ScrollView {
+                id: rightScroll
                 Layout.preferredWidth: 380
                 Layout.fillHeight: true
+                clip: true
+                contentWidth: rightCol.width
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                background: Item {}
+
+            ColumnLayout {
+                id: rightCol
+                width: rightScroll.width - 12
                 spacing: 14
 
                 // Watchlist editor
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.min(380, watchlistContent.implicitHeight + 36)
+                    Layout.preferredHeight: watchlistContent.implicitHeight + 36
                     Layout.minimumHeight: 180
                     radius: 8
                     color: theme.panel
@@ -310,9 +320,11 @@ ApplicationWindow {
                         ListView {
                             id: watchlistView
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredHeight: Math.max(140, Math.min(360, contentHeight))
-                            clip: true
+                            // Let the ListView grow to fit all rows; the
+                            // outer ScrollView provides vertical scrolling.
+                            Layout.preferredHeight: contentHeight
+                            interactive: false
+                            clip: false
                             spacing: 6
                             model: pageController.watchlistRich
                             delegate: Rectangle {
@@ -419,11 +431,12 @@ ApplicationWindow {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Layout.preferredHeight: researchContent.implicitHeight + 36
                     radius: 8
                     color: theme.panel
                     border.color: theme.line
                     ColumnLayout {
+                        id: researchContent
                         anchors.fill: parent
                         anchors.margins: 16
                         spacing: 10
@@ -440,8 +453,7 @@ ApplicationWindow {
                 }
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(260, thesisContent.implicitHeight + 36)
-                    Layout.minimumHeight: thesisContent.implicitHeight + 36
+                    Layout.preferredHeight: thesisContent.implicitHeight + 36
                     radius: 8
                     color: theme.panel
                     border.color: theme.line
@@ -461,6 +473,7 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
             }
         }
     }
