@@ -274,6 +274,7 @@ if(STOK_ENABLE_DESKTOP_SHELL)
             "valuation-research/src/ValuationResearchController.cpp"
             "valuation-research/src/ValuationResearchController.h"
         )
+        target_link_libraries(stok_valuation_research PRIVATE Qt6::Sql)
 
         stok_add_feature_page(
             stok_risk_backtest

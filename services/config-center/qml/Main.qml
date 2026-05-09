@@ -362,6 +362,48 @@ ApplicationWindow {
                     valueText: "300000"
                 }
             }
+
+            ConfigSection {
+                Layout.fillWidth: true
+                titleText: "估值研究"
+                subtitleText: "DCF 折现率 / 永续增长 / 买卖线 / 刷新间隔"
+
+                ConfigRow {
+                    Layout.fillWidth: true
+                    labelText: "DCF 折现率 (WACC)"
+                    keyText: "valuation.dcf.discountRate"
+                    targetText: "valuation-research"
+                    valueText: "0.085"
+                }
+                ConfigRow {
+                    Layout.fillWidth: true
+                    labelText: "DCF 永续增长率"
+                    keyText: "valuation.dcf.terminalGrowth"
+                    targetText: "valuation-research"
+                    valueText: "0.025"
+                }
+                ConfigRow {
+                    Layout.fillWidth: true
+                    labelText: "买入线 = 合理价 ×"
+                    keyText: "valuation.bands.buyMultiplier"
+                    targetText: "valuation-research"
+                    valueText: "0.85"
+                }
+                ConfigRow {
+                    Layout.fillWidth: true
+                    labelText: "卖出线 = 合理价 ×"
+                    keyText: "valuation.bands.sellMultiplier"
+                    targetText: "valuation-research"
+                    valueText: "1.18"
+                }
+                ConfigRow {
+                    Layout.fillWidth: true
+                    labelText: "估值刷新间隔 ms (默认 30 分钟)"
+                    keyText: "update.valuation.intervalMs"
+                    targetText: "valuation-research"
+                    valueText: "1800000"
+                }
+            }
         }
     }
 }

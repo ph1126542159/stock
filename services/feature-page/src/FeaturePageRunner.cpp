@@ -108,7 +108,21 @@ int run(int argc, char* argv[], const FeaturePageSpec& spec)
         QString::fromUtf8(spec.fallbackDescription),
         menuDescription);
 
-    QObject* pageController = spec.controllerFactory ? spec.controllerFactory(&app, localization) : nullptr;
+    QObject* pageController = nullptr;
+    if (spec.controllerFactoryExt)
+    {
+        FeatureControllerContext ctx;
+        ctx.parent = &app;
+        ctx.localization = localization;
+        ctx.configuration = configuration;
+        ctx.configPath = configPath;
+        ctx.telemetry = &telemetry;
+        pageController = spec.controllerFactoryExt(ctx);
+    }
+    else if (spec.controllerFactory)
+    {
+        pageController = spec.controllerFactory(&app, localization);
+    }
 
     {
         auto localeSettings = stok::services::common::readDdsSettings(*configuration);

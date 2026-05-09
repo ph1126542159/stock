@@ -113,16 +113,16 @@ ApplicationWindow {
         anchors.top: parent.top
         height: 28
         z: 1000
-        color: "#3a0a0a"
-        border.color: "#ff4d4d"
+        color: "#1a2638"
+        border.color: "#3878c2"
         border.width: 1
         Text {
             anchors.fill: parent
             anchors.leftMargin: 14
             anchors.rightMargin: 14
-            text: "⚠ 本页为占位示例，估值指标基于内置场景，未接入真实财报/行情数据，不构成投资建议。"
-            color: "#ff9b9b"
-            font.family: "Segoe UI Variable"
+            text: "估值数据来自公开财报与行情；评分为透明因子模型，不构成投资建议。" + "  " + (pageController.assumptionSummary || "")
+            color: "#9bc8ff"
+            font.family: "Microsoft YaHei UI"
             font.pixelSize: 13
             font.bold: true
             horizontalAlignment: Text.AlignHCenter
@@ -149,20 +149,21 @@ ApplicationWindow {
                 Text { text: localizationController.tr("window.description"); color: theme.muted; font.pixelSize: 14; Layout.fillWidth: true; elide: Text.ElideRight }
             }
             Rectangle {
-                Layout.preferredWidth: 200
+                Layout.preferredWidth: 320
                 Layout.preferredHeight: 44
                 radius: 8
                 color: "#10233a"
                 border.color: "#2b6fad"
-                Text { anchors.centerIn: parent; text: pageController.status; color: theme.accent; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight }
+                Text { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; verticalAlignment: Text.AlignVCenter; text: pageController.status + "  " + (pageController.lastUpdatedText || ""); color: theme.accent; font.family: "Microsoft YaHei UI"; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight }
             }
             Button {
-                Layout.preferredWidth: 92
+                Layout.preferredWidth: 100
                 Layout.preferredHeight: 44
-                text: localizationController.tr("action.refresh")
+                text: pageController.refreshing ? "刷新中..." : localizationController.tr("action.refresh")
+                enabled: !pageController.refreshing
                 onClicked: pageController.refresh()
-                background: Rectangle { radius: 8; color: parent.down ? "#1f5d82" : "#132b45"; border.color: theme.accent }
-                contentItem: Text { text: parent.text; color: theme.text; font.pixelSize: 14; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                background: Rectangle { radius: 8; color: parent.down ? "#1f5d82" : "#132b45"; border.color: theme.accent; opacity: parent.enabled ? 1.0 : 0.5 }
+                contentItem: Text { text: parent.text; color: theme.text; font.family: "Microsoft YaHei UI"; font.pixelSize: 14; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
             }
         }
 
@@ -246,9 +247,88 @@ ApplicationWindow {
             }
 
             ColumnLayout {
-                Layout.preferredWidth: 360
+                Layout.preferredWidth: 380
                 Layout.fillHeight: true
                 spacing: 14
+
+                // Watchlist editor
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(380, watchlistContent.implicitHeight + 36)
+                    Layout.minimumHeight: 180
+                    radius: 8
+                    color: theme.panel
+                    border.color: theme.line
+                    ColumnLayout {
+                        id: watchlistContent
+                        anchors.fill: parent
+                        anchors.margins: 16
+                        spacing: 10
+
+                        Text { text: "标的池"; color: theme.text; font.family: "Microsoft YaHei UI"; font.pixelSize: 21; font.bold: true }
+                        Text { text: "格式 A:600519 / HK:00700 / US:AAPL"; color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 12 }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            TextField {
+                                id: addInput
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 36
+                                placeholderText: "A:600519"
+                                color: theme.text
+                                font.family: "Microsoft YaHei UI"
+                                font.pixelSize: 14
+                                background: Rectangle { radius: 6; color: theme.panel2; border.color: addInput.activeFocus ? theme.accent : theme.line }
+                                onAccepted: { if (pageController.addSymbol(text)) text = "" }
+                            }
+                            Button {
+                                id: addBtn
+                                Layout.preferredWidth: 64
+                                Layout.preferredHeight: 36
+                                text: "添加"
+                                onClicked: { if (pageController.addSymbol(addInput.text)) addInput.text = "" }
+                                background: Rectangle { radius: 6; color: addBtn.down ? "#1f5d82" : "#132b45"; border.color: theme.accent }
+                                contentItem: Text { text: addBtn.text; color: theme.text; font.family: "Microsoft YaHei UI"; font.pixelSize: 13; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            }
+                        }
+
+                        ListView {
+                            id: watchlistView
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(220, contentHeight)
+                            clip: true
+                            spacing: 4
+                            model: pageController.watchlist
+                            delegate: Rectangle {
+                                id: watchRow
+                                required property string modelData
+                                width: ListView.view.width
+                                implicitHeight: 32
+                                radius: 6
+                                color: "#0c1520"
+                                border.color: "#1c2a3c"
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 6
+                                    spacing: 8
+                                    Text { text: watchRow.modelData; color: theme.text; font.family: "Consolas"; font.pixelSize: 13; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    Button {
+                                        id: removeBtn
+                                        Layout.preferredWidth: 50
+                                        Layout.preferredHeight: 22
+                                        text: "移除"
+                                        onClicked: pageController.removeSymbol(watchRow.modelData)
+                                        background: Rectangle { radius: 4; color: removeBtn.down ? "#5a1f1f" : "#2a1414"; border.color: theme.red }
+                                        contentItem: Text { text: removeBtn.text; color: theme.red; font.family: "Microsoft YaHei UI"; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true

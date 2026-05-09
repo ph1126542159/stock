@@ -24,7 +24,7 @@ cmd /c start "" /D "e:\stock\build-vs2022\bin" "e:\stock\build-vs2022\bin\macchi
 - 价值投资榜的"基金 + 股票"评分改成由 [`tools/value_board_provider.py`](tools/value_board_provider.py) 通过 [AKShare](https://github.com/akfamily/akshare) 抓真实净值/行情，按透明的多因子公式打分（25% 1y 回报 + 20% 最大回撤 + 20% 夏普 + 15% 波动率 + 20% 估值，权重在脚本顶部 `SCORING_WEIGHTS`）。前 10 支基金 + 5 支股票来自一个手工筛选的蓝筹候选池，所有候选都是公开存在的代码（`110020 易方达沪深300ETF联接A` / `600519 贵州茅台` 等）。
 - 启动期 `purgeNonRealValueBoardData()` 清空 `value_board_assets` 表，杜绝任何残留示例数据。脚本失败时**保留库内上一次成功数据**，绝不退回到内置假数据。
 - 美股观察的实时曲线由 [`tools/us_history_provider.py`](tools/us_history_provider.py) 启动期一次性 backfill 60 个分钟级真实历史点（个股用 akshare `stock_us_hist_min_em`，指数用 `index_us_stock_sina` 把日 K 收盘价合成等距 timestamp）。
-- 占位页面（持仓 / 交易提醒 / 风控回测 / 估值研究）顶部加红色横幅 "本页为占位示例，未接入真实数据，不构成投资建议"。
+- 占位页面（持仓 / 交易提醒 / 风控回测）顶部加红色横幅 "本页为占位示例，未接入真实数据，不构成投资建议"。估值研究页已升级为商业化功能，详见下文。
 
 ### 自包含 Python 运行时
 
@@ -68,7 +68,19 @@ tools/
   us_history_provider.py  # 美股观察分钟级历史 backfill
 ```
 
-## 已知边界 / 待办
+### 估值研究页（商业化版）
+
+`services/valuation-research/` 已替换为生产可用的 DCF + 多因子模型：
+
+- **真实数据**：A 股财务来自 AKShare `stock_financial_abstract`（80 项指标 × 季度历史），行情走腾讯 `qt.gtimg.cn` 直连（绕开东财 push2 的 502 / SSL 问题）；港股走 `stock_hk_financial_indicator_em` TTM；美股走 `stock_financial_us_analysis_indicator_em` 年报。
+- **DCF 估值**：10 年自由现金流折现，折现率 / 永续增长率 / 历史窗口可在配置中心运行时调。银行/保险走相同模型但合理价偏高（已知边界，金融股 DCF 不适用）。
+- **评分公式（透明权重）**：30% 安全边际 + 20% PE 分位 + 20% FCF 质量 + 15% ROE + 15% ROIC，权重写在 [tools/valuation_research_provider.py](tools/valuation_research_provider.py) 顶部。
+- **动作判定**：安全边际 ≥15% 且评分 ≥75 → 加仓；≤-12% 或评分 ≤40 → 卖出；其余跟进/转仓。
+- **可编辑标的池**：10 支默认价值股（茅台 / 美的 / 招行 / 格力 / 平安 / 工行 / 长电 / 五粮液 / 腾讯 / 中移动），UI 加搜索框 + 添加/移除按钮，存到 SQLite `valuation_watchlist` 表。
+- **异步 + 缓存**：每 30 分钟（可配）后台跑 Python 脚本，结果写 SQLite `valuation_assets` 表，UI 读库展示。脚本失败时保留库内上一次成功数据，UI 标 "刷新失败" 但不变空。
+- **配置中心可调**：DCF 折现率 / 永续增长率 / 买入线乘数 / 卖出线乘数 / 刷新间隔，通过 DDS config 总线运行时下发。
+
+
 
 - 价值评分中的 valuation 因子目前是占位常数（基金 60、股票 55），真正接 PE 分位 / 股息率需要更长时间的 akshare `stock_a_indicator_lg`。
 - QML 里 `tr()` 是 `Q_INVOKABLE` 不是 NOTIFY 属性，运行时切换语言不会自动重新计算所有绑定文本——目前默认就是中文，绕开了这个限制。彻底修复需要给每个子服务的 Main.qml 上百处 `tr(...)` 调用绑定一个 `revision` 属性。

@@ -3,7 +3,7 @@
 
 int main(int argc, char* argv[])
 {
-    const stok::services::feature_page::FeaturePageSpec spec{
+    stok::services::feature_page::FeaturePageSpec spec{
         "stok-valuation-research",
         "stok valuation research service",
         "valuation-research.properties",
@@ -12,6 +12,7 @@ int main(int argc, char* argv[])
         "Valuation Research",
         "DCF, PE/PB percentile, FCF quality, and research files",
         "StokValuationResearch",
+        nullptr,
         createValuationResearchController
     };
     return stok::services::feature_page::run(argc, argv, spec);
