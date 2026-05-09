@@ -13,13 +13,17 @@ osp.web.server.securePort = 0
 # Settings
 #
 macchina.settings.path = ${application.configDir}settings.properties
+macchina.hideConsoleWindow = true
+dds.configTopic = stok.ui.config
 
 
 #
 # stok Services
 #
 stok.services.directory = ${application.configDir}../services
-stok.services.autostart = market-data-service;desktop-shell
+stok.services.autostart = market-data-service;desktop-shell;market-board;config-center;portfolio-board;log-viewer
+stok.services.keepAlive.enabled = true
+stok.services.keepAlive.restartDelayMs = 0
 stok.services.market-data-service.command = stok-market-data-service
 stok.services.market-data-service.arguments = --config=${application.configDir}../services/market-data-service.properties
 stok.services.market-data-service.workingDir = ${application.configDir}../services
@@ -28,6 +32,25 @@ stok.services.desktop-shell.command = stok-desktop-shell
 stok.services.desktop-shell.arguments = --config=${application.configDir}../services/desktop-shell.properties
 stok.services.desktop-shell.workingDir = ${application.configDir}../services
 stok.services.desktop-shell.gracefulStop = false
+stok.services.desktop-shell.terminateServerOnExit = true
+stok.services.desktop-shell.keepAlive = false
+stok.services.desktop-shell.forceShowWindow = false
+stok.services.market-board.command = stok-market-board
+stok.services.market-board.arguments = --config=${application.configDir}../services/market-board.properties
+stok.services.market-board.workingDir = ${application.configDir}../services
+stok.services.market-board.gracefulStop = false
+stok.services.config-center.command = stok-config-center
+stok.services.config-center.arguments = --config=${application.configDir}../services/config-center.properties
+stok.services.config-center.workingDir = ${application.configDir}../services
+stok.services.config-center.gracefulStop = false
+stok.services.portfolio-board.command = stok-portfolio-board
+stok.services.portfolio-board.arguments = --config=${application.configDir}../services/portfolio-board.properties
+stok.services.portfolio-board.workingDir = ${application.configDir}../services
+stok.services.portfolio-board.gracefulStop = false
+stok.services.log-viewer.command = stok-log-viewer
+stok.services.log-viewer.arguments = --config=${application.configDir}../services/log-viewer.properties
+stok.services.log-viewer.workingDir = ${application.configDir}../services
+stok.services.log-viewer.gracefulStop = false
 
 
 #
@@ -154,7 +177,7 @@ logging.loggers.remoting.level = notice
 
 logging.channels.file.class = FileChannel
 logging.channels.file.pattern = %Y-%m-%d %H:%M:%S.%i [%p] %s<%I>: %t
-logging.channels.file.path = ${application.dir}${application.baseName}.log
+logging.channels.file.path = ${application.dir}${application.baseName}-runtime.log
 logging.channels.file.rotation = daily
 logging.channels.file.archive = number
 logging.channels.file.purgeCount = 10

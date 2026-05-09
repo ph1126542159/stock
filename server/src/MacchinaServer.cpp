@@ -29,15 +29,432 @@
 #include "Poco/OpenTelemetry/TelemetryClient.h"
 #include "Poco/OpenTelemetry/TelemetryLoggingChannel.h"
 #include "Poco/OpenTelemetry/TelemetryService.h"
+#include "Poco/JSON/Object.h"
+#include "Poco/JSON/Parser.h"
 #include "Poco/Path.h"
 #include "Poco/Process.h"
 #include "Poco/SplitterChannel.h"
 #include "Poco/StringTokenizer.h"
+#include "stok/services/common/TextMessageBus.h"
+#include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <thread>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+namespace
+{
+	class NativeProcessHandle final: public Poco::ProcessHandle
+	{
+	public:
+		NativeProcessHandle(HANDLE processHandle, Poco::UInt32 pid):
+			Poco::ProcessHandle(new Poco::ProcessHandleImpl(processHandle, pid))
+		{
+		}
+	};
+
+	struct WindowSearchContext
+	{
+		DWORD processId = 0;
+		HWND window = nullptr;
+	};
+
+	BOOL CALLBACK FindTopLevelWindowForProcess(HWND hwnd, LPARAM lParam)
+	{
+		auto* context = reinterpret_cast<WindowSearchContext*>(lParam);
+		if (!context)
+		{
+			return FALSE;
+		}
+
+		DWORD processId = 0;
+		GetWindowThreadProcessId(hwnd, &processId);
+		if (processId != context->processId)
+		{
+			return TRUE;
+		}
+
+		if (GetParent(hwnd) != nullptr)
+		{
+			return TRUE;
+		}
+
+		context->window = hwnd;
+		return FALSE;
+	}
+
+	std::string processImageFileName(DWORD processId)
+	{
+		HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+		if (!process)
+		{
+			return {};
+		}
+
+		wchar_t buffer[MAX_PATH] = {};
+		DWORD size = MAX_PATH;
+		const BOOL ok = QueryFullProcessImageNameW(process, 0, buffer, &size);
+		CloseHandle(process);
+		if (!ok)
+		{
+			return {};
+		}
+
+		std::wstring path(buffer, size);
+		const std::wstring::size_type slash = path.find_last_of(L"\\/");
+		std::wstring fileName = slash == std::wstring::npos ? path : path.substr(slash + 1);
+		for (wchar_t& ch: fileName)
+		{
+			ch = static_cast<wchar_t>(towlower(ch));
+		}
+
+		std::string result;
+		result.reserve(fileName.size());
+		for (wchar_t ch: fileName)
+		{
+			result.push_back(static_cast<char>(ch));
+		}
+		return result;
+	}
+
+	enum class ProcessProbeState
+	{
+		running,
+		exited,
+		unknown
+	};
+
+	ProcessProbeState probeProcessState(DWORD processId, DWORD& exitCode)
+	{
+		if (processId == 0)
+		{
+			exitCode = 1;
+			return ProcessProbeState::exited;
+		}
+
+		HANDLE process = OpenProcess(
+			SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+			FALSE,
+			processId);
+		if (!process)
+		{
+			if (GetLastError() == ERROR_INVALID_PARAMETER)
+			{
+				exitCode = 1;
+				return ProcessProbeState::exited;
+			}
+			return ProcessProbeState::unknown;
+		}
+
+		const DWORD waitResult = WaitForSingleObject(process, 0);
+		if (waitResult == WAIT_TIMEOUT)
+		{
+			CloseHandle(process);
+			return ProcessProbeState::running;
+		}
+
+		DWORD nativeExitCode = 1;
+		if (GetExitCodeProcess(process, &nativeExitCode) && nativeExitCode != STILL_ACTIVE)
+		{
+			exitCode = nativeExitCode;
+		}
+		else
+		{
+			exitCode = 1;
+		}
+		CloseHandle(process);
+		return ProcessProbeState::exited;
+	}
+
+	BOOL CALLBACK FindDesktopShellWindow(HWND hwnd, LPARAM lParam)
+	{
+		if (!IsWindow(hwnd) || GetParent(hwnd) != nullptr)
+		{
+			return TRUE;
+		}
+
+		DWORD processId = 0;
+		GetWindowThreadProcessId(hwnd, &processId);
+		if (processId == 0 ||
+			processImageFileName(processId) != "stok-desktop-shell.exe")
+		{
+			return TRUE;
+		}
+
+		const int titleLength = GetWindowTextLengthW(hwnd);
+		if (titleLength <= 0)
+		{
+			return TRUE;
+		}
+
+		RECT rect = {};
+		if (!GetWindowRect(hwnd, &rect))
+		{
+			return TRUE;
+		}
+
+		const bool minimized = IsIconic(hwnd) != FALSE;
+		const bool hasUsableSize =
+			(rect.right - rect.left) >= 300 &&
+			(rect.bottom - rect.top) >= 200;
+		if (!minimized && !hasUsableSize)
+		{
+			return TRUE;
+		}
+
+		auto* result = reinterpret_cast<HWND*>(lParam);
+		*result = hwnd;
+		return FALSE;
+	}
+
+	bool bringDesktopShellToForeground()
+	{
+		HWND shellWindow = nullptr;
+		EnumWindows(FindDesktopShellWindow, reinterpret_cast<LPARAM>(&shellWindow));
+		if (!shellWindow || !IsWindow(shellWindow))
+		{
+			return false;
+		}
+
+		DWORD processId = 0;
+		GetWindowThreadProcessId(shellWindow, &processId);
+		if (processId != 0)
+		{
+			AllowSetForegroundWindow(processId);
+		}
+
+		ShowWindow(shellWindow, SW_RESTORE);
+		ShowWindow(shellWindow, SW_SHOWMAXIMIZED);
+		SetForegroundWindow(shellWindow);
+		return true;
+	}
+
+	std::wstring canonicalWindowsPath(const std::wstring& path)
+	{
+		std::vector<wchar_t> buffer(MAX_PATH);
+		DWORD length = GetFullPathNameW(
+			path.c_str(),
+			static_cast<DWORD>(buffer.size()),
+			buffer.data(),
+			nullptr);
+		if (length == 0)
+		{
+			return path;
+		}
+		if (length >= buffer.size())
+		{
+			buffer.resize(static_cast<std::size_t>(length) + 1);
+			length = GetFullPathNameW(
+				path.c_str(),
+				static_cast<DWORD>(buffer.size()),
+				buffer.data(),
+				nullptr);
+			if (length == 0)
+			{
+				return path;
+			}
+		}
+		return std::wstring(buffer.data(), length);
+	}
+
+	std::wstring executableDirectory()
+	{
+		std::vector<wchar_t> buffer(MAX_PATH);
+		DWORD length = GetModuleFileNameW(
+			nullptr,
+			buffer.data(),
+			static_cast<DWORD>(buffer.size()));
+		if (length >= buffer.size())
+		{
+			buffer.resize(32768);
+			length = GetModuleFileNameW(
+				nullptr,
+				buffer.data(),
+				static_cast<DWORD>(buffer.size()));
+		}
+		if (length == 0)
+		{
+			return {};
+		}
+
+		std::wstring path(buffer.data(), length);
+		const std::wstring::size_type slash = path.find_last_of(L"\\/");
+		return slash == std::wstring::npos ? std::wstring{} : path.substr(0, slash);
+	}
+
+	std::wstring resolveFromExecutableDirectory(const wchar_t* relativePath)
+	{
+		const std::wstring base = executableDirectory();
+		if (base.empty())
+		{
+			return {};
+		}
+		return canonicalWindowsPath(base + L"\\" + relativePath);
+	}
+
+	bool regularFileExists(const std::wstring& path)
+	{
+		const DWORD attributes = GetFileAttributesW(path.c_str());
+		return attributes != INVALID_FILE_ATTRIBUTES &&
+			(attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+	}
+
+	std::wstring quoteWindowsArgument(const std::wstring& value)
+	{
+		std::wstring quoted = L"\"";
+		for (wchar_t ch: value)
+		{
+			if (ch == L'"')
+			{
+				quoted += L"\\\"";
+			}
+			else
+			{
+				quoted += ch;
+			}
+		}
+		quoted += L"\"";
+		return quoted;
+	}
+
+	bool launchDesktopShellForExistingInstance()
+	{
+		const std::wstring shellPath = resolveFromExecutableDirectory(
+			L"..\\services\\stok-desktop-shell.exe");
+		const std::wstring configPath = resolveFromExecutableDirectory(
+			L"..\\services\\runtime\\desktop-shell\\config.properties");
+		const std::wstring workingDirectory = resolveFromExecutableDirectory(
+			L"..\\services\\runtime\\desktop-shell");
+		if (shellPath.empty() || !regularFileExists(shellPath))
+		{
+			return false;
+		}
+
+		std::wstring commandLine = quoteWindowsArgument(shellPath);
+		if (!configPath.empty())
+		{
+			commandLine += L" --config=" + quoteWindowsArgument(configPath);
+		}
+		std::vector<wchar_t> commandBuffer(commandLine.begin(), commandLine.end());
+		commandBuffer.push_back(L'\0');
+
+		STARTUPINFOW startupInfo{};
+		startupInfo.cb = sizeof(startupInfo);
+		startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+		startupInfo.wShowWindow = SW_SHOWMAXIMIZED;
+
+		PROCESS_INFORMATION processInformation{};
+		const BOOL launched = CreateProcessW(
+			shellPath.c_str(),
+			commandBuffer.data(),
+			nullptr,
+			nullptr,
+			FALSE,
+			0,
+			nullptr,
+			workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
+			&startupInfo,
+			&processInformation);
+		if (!launched)
+		{
+			return false;
+		}
+
+		AllowSetForegroundWindow(processInformation.dwProcessId);
+		CloseHandle(processInformation.hThread);
+		CloseHandle(processInformation.hProcess);
+		return true;
+	}
+
+	const wchar_t* shutdownEventName()
+	{
+		return L"Local\\StokMacchinaShutdownRequested";
+	}
+
+	std::wstring widenString(const std::string& value)
+	{
+		if (value.empty())
+		{
+			return {};
+		}
+
+		int length = MultiByteToWideChar(
+			CP_UTF8,
+			0,
+			value.c_str(),
+			static_cast<int>(value.size()),
+			nullptr,
+			0);
+		if (length <= 0)
+		{
+			length = MultiByteToWideChar(
+				CP_ACP,
+				0,
+				value.c_str(),
+				static_cast<int>(value.size()),
+				nullptr,
+				0);
+		}
+		if (length <= 0)
+		{
+			return {};
+		}
+
+		std::wstring wide(static_cast<std::size_t>(length), L'\0');
+		int converted = MultiByteToWideChar(
+			CP_UTF8,
+			0,
+			value.c_str(),
+			static_cast<int>(value.size()),
+			wide.data(),
+			length);
+		if (converted <= 0)
+		{
+			converted = MultiByteToWideChar(
+				CP_ACP,
+				0,
+				value.c_str(),
+				static_cast<int>(value.size()),
+				wide.data(),
+				length);
+		}
+		if (converted <= 0)
+		{
+			return {};
+		}
+
+		return wide;
+	}
+
+	std::string buildCommandLine(const std::string& command, const std::vector<std::string>& arguments)
+	{
+		auto escape = [](const std::string& value)
+		{
+			return Poco::Process::mustEscapeArg(value)
+				? Poco::Process::escapeArg(value)
+				: value;
+		};
+
+		std::string commandLine = escape(command);
+		for (const auto& argument : arguments)
+		{
+			commandLine.append(" ");
+			commandLine.append(escape(argument));
+		}
+		return commandLine;
+	}
+}
+#endif
 
 
 using Poco::Util::ServerApplication;
@@ -84,6 +501,13 @@ protected:
         std::string workingDirectory;
         std::vector<std::string> arguments;
         bool gracefulStop = false;
+        bool terminateServerOnExit = false;
+        bool keepAlive = true;
+        bool forceShowWindow = false;
+        int restartDelayMs = 0;
+        Poco::UInt32 processId = 0;
+        bool exitObserved = false;
+        int exitCode = -1;
         std::unique_ptr<Poco::ProcessHandle> handle;
     };
 
@@ -185,6 +609,153 @@ protected:
 			_pTelemetryServiceRef = nullptr;
 		}
 		_pTelemetryService = nullptr;
+	}
+
+	void startConfigSubscription()
+	{
+		if (_configSubscriber)
+		{
+			return;
+		}
+
+		stok::services::common::DdsSettings settings;
+		settings.domainId = static_cast<std::uint32_t>(config().getInt("dds.domainId", 42));
+		settings.topicName = config().getString("dds.configTopic", "stok.ui.config");
+		settings.segmentSize = static_cast<std::uint32_t>(
+			config().getInt("dds.shm.segmentSize", 4 * 1024 * 1024));
+		settings.portQueueCapacity = static_cast<std::uint32_t>(
+			config().getInt("dds.shm.portQueueCapacity", 256));
+
+		_configSubscriber = std::make_unique<stok::services::common::TextMessageSubscriber>(
+			settings,
+			Poco::OpenTelemetry::TelemetryClient(_pTelemetryService));
+
+		std::string error;
+		const bool started = _configSubscriber->start(
+			"macchina-config-subscriber",
+			[this](const stok::services::common::TextMessage& message)
+			{
+				applyConfigUpdate(message.payload);
+			},
+			stok::services::common::TextMessageSubscriber::MatchCallback(),
+			&error);
+		if (started)
+		{
+			logger().information("macchina subscribed to config topic \"%s\".", settings.topicName);
+		}
+		else
+		{
+			logger().warning("macchina config subscription failed: %s", error);
+			_configSubscriber.reset();
+		}
+	}
+
+	void stopConfigSubscription()
+	{
+		if (_configSubscriber)
+		{
+			_configSubscriber->stop();
+			_configSubscriber.reset();
+		}
+	}
+
+	bool parseConfigBool(const std::string& value) const
+	{
+		std::string normalized = value;
+		std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch)
+		{
+			return static_cast<char>(std::tolower(ch));
+		});
+		return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on";
+	}
+
+	void applyConfigUpdate(const std::string& payload)
+	{
+		try
+		{
+			Poco::JSON::Parser parser;
+			const auto parsed = parser.parse(payload);
+			const auto object = parsed.extract<Poco::JSON::Object::Ptr>();
+			if (!object || object->getValue<std::string>("type") != "config_update")
+			{
+				return;
+			}
+
+			const std::string target = object->optValue<std::string>("target", "");
+			if (target != "macchina" && target != "global" && target != "*")
+			{
+				return;
+			}
+
+			const std::string key = object->optValue<std::string>("key", "");
+			const std::string value = object->optValue<std::string>("value", "");
+			if (key.empty() || value.empty())
+			{
+				return;
+			}
+
+			std::lock_guard<std::mutex> lock(_managedServicesMutex);
+			if (key == "stok.services.keepAlive.enabled")
+			{
+				const bool enabled = parseConfigBool(value);
+				for (auto& service : _managedServices)
+				{
+					if (!service.terminateServerOnExit)
+					{
+						service.keepAlive = enabled;
+					}
+				}
+				logger().information("Updated global service keepAlive to %s.", enabled ? "true" : "false");
+				return;
+			}
+			if (key == "stok.services.keepAlive.restartDelayMs")
+			{
+				const int delayMs = std::max(0, std::atoi(value.c_str()));
+				for (auto& service : _managedServices)
+				{
+					if (!service.terminateServerOnExit)
+					{
+						service.restartDelayMs = delayMs;
+					}
+				}
+				logger().information("Updated global service restart delay to %d ms.", delayMs);
+				return;
+			}
+
+			const std::string prefix = "stok.services.";
+			const std::string keepAliveSuffix = ".keepAlive";
+			const std::string restartDelaySuffix = ".restartDelayMs";
+			if (key.rfind(prefix, 0) == 0 && key.size() > prefix.size())
+			{
+				for (auto& service : _managedServices)
+				{
+					const std::string keepAliveKey = prefix + service.id + keepAliveSuffix;
+					const std::string restartDelayKey = prefix + service.id + restartDelaySuffix;
+					if (key == keepAliveKey)
+					{
+						service.keepAlive = !service.terminateServerOnExit && parseConfigBool(value);
+						logger().information(
+							"Updated service \"%s\" keepAlive to %s.",
+							service.id,
+							service.keepAlive ? "true" : "false");
+						return;
+					}
+					if (key == restartDelayKey)
+					{
+						service.restartDelayMs = std::max(0, std::atoi(value.c_str()));
+						logger().information(
+							"Updated service \"%s\" restart delay to %d ms.",
+							service.id,
+							service.restartDelayMs);
+						return;
+					}
+				}
+			}
+		}
+		catch (Poco::Exception& exc)
+		{
+			logger().warning("Ignoring invalid macchina config payload: %s", exc.displayText());
+		}
 	}
 
 	void emitStartupTelemetry(const std::string& settingsPath)
@@ -293,6 +864,10 @@ protected:
         const auto serviceIds = splitList(
             config().getString("stok.services.autostart", ""),
             ",;");
+#if defined(_WIN32)
+        const bool useManagedServiceJob = ensureManagedServiceJob();
+        ensureShutdownEvent();
+#endif
 
         if (servicesDirectory.empty() || serviceIds.empty())
         {
@@ -314,6 +889,18 @@ protected:
             const std::string workingDirectory = config().getString(propertyPrefix + "workingDir", servicesDirectory);
             const auto arguments = splitList(config().getString(propertyPrefix + "arguments", ""), ";");
             const bool gracefulStop = config().getBool(propertyPrefix + "gracefulStop", false);
+            const bool terminateServerOnExit = config().getBool(
+                propertyPrefix + "terminateServerOnExit",
+                false);
+            const bool forceShowWindow = config().getBool(
+                propertyPrefix + "forceShowWindow",
+                false);
+            const bool keepAlive = config().getBool(
+                propertyPrefix + "keepAlive",
+                config().getBool("stok.services.keepAlive.enabled", true) && !terminateServerOnExit);
+            const int restartDelayMs = config().getInt(
+                propertyPrefix + "restartDelayMs",
+                config().getInt("stok.services.keepAlive.restartDelayMs", 0));
 
             auto serviceActivity = telemetry.beginActivity(
                 "service.launch",
@@ -337,10 +924,16 @@ protected:
 
             try
             {
-                Poco::ProcessHandle handle = Poco::Process::launch(
-                    resolvedCommand,
-                    arguments,
-                    workingDirectory);
+                Poco::ProcessHandle handle =
+#if defined(_WIN32)
+                    forceShowWindow
+                    ? launchManagedServiceWithWindow(resolvedCommand, arguments, workingDirectory)
+                    :
+#endif
+                    Poco::Process::launch(
+                        resolvedCommand,
+                        arguments,
+                        workingDirectory);
 
                 ManagedService service;
                 service.id = serviceId;
@@ -348,13 +941,34 @@ protected:
                 service.workingDirectory = workingDirectory;
                 service.arguments = arguments;
                 service.gracefulStop = gracefulStop;
+                service.terminateServerOnExit = terminateServerOnExit;
+                service.keepAlive = keepAlive;
+                service.forceShowWindow = forceShowWindow;
+                service.restartDelayMs = std::max(0, restartDelayMs);
+                service.processId = handle.id();
                 service.handle = std::make_unique<Poco::ProcessHandle>(handle);
+#if defined(_WIN32)
+                if (useManagedServiceJob)
+                {
+                    assignManagedServiceToJob(service);
+                }
+#endif
 
                 logger().information(
-                    "Started service \"%s\" (pid=%d) from \"%s\".",
+                    "Started service \"%s\" (pid=%d, keepAlive=%d, restartDelayMs=%d, primary=%d) from \"%s\".",
                     service.id,
                     static_cast<int>(service.handle->id()),
+                    service.keepAlive ? 1 : 0,
+                    service.restartDelayMs,
+                    service.terminateServerOnExit ? 1 : 0,
                     service.command);
+
+#if defined(_WIN32)
+                if (forceShowWindow)
+                {
+                    ensureManagedServiceWindowVisible(service);
+                }
+#endif
 
                 telemetry.metric(
                     "application.service.pid",
@@ -363,7 +977,10 @@ protected:
                     "Process identifier of a launcher-managed child service",
                     {{"service.id", service.id}});
                 serviceActivity.success("pid=" + std::to_string(service.handle->id()));
-                _managedServices.push_back(std::move(service));
+                {
+                    std::lock_guard<std::mutex> lock(_managedServicesMutex);
+                    _managedServices.push_back(std::move(service));
+                }
             }
             catch (Poco::Exception& exc)
             {
@@ -383,6 +1000,290 @@ protected:
             "Managed child services currently active after launcher startup",
             {{"phase", "post-launch"}});
         launcherActivity.success("services launched");
+
+        startManagedServiceMonitor();
+    }
+
+    int observeServiceExit(ManagedService& service)
+    {
+        if (!service.handle)
+        {
+            return -1;
+        }
+
+        if (service.exitObserved)
+        {
+            return service.exitCode == -1 ? 1 : service.exitCode;
+        }
+
+#if defined(_WIN32)
+        DWORD nativeExitCode = 1;
+        const ProcessProbeState state = probeProcessState(
+            static_cast<DWORD>(service.processId),
+            nativeExitCode);
+        if (state == ProcessProbeState::running)
+        {
+            return -1;
+        }
+        if (state == ProcessProbeState::exited)
+        {
+            service.exitCode = static_cast<int>(nativeExitCode);
+            service.exitObserved = true;
+            return service.exitCode;
+        }
+#endif
+
+        int exitCode = -1;
+        try
+        {
+            exitCode = Poco::Process::tryWait(*service.handle);
+        }
+        catch (Poco::Exception& exc)
+        {
+            logger().warning(
+                "Process wait probe failed for service \"%s\" (pid=%d): %s",
+                service.id,
+                static_cast<int>(service.processId),
+                exc.displayText());
+            service.exitCode = 1;
+            service.exitObserved = true;
+            return service.exitCode;
+        }
+        if (exitCode != -1)
+        {
+            service.exitObserved = true;
+            service.exitCode = exitCode;
+            return exitCode;
+        }
+
+        if (!Poco::Process::isRunning(*service.handle))
+        {
+            try
+            {
+                service.exitCode = Poco::Process::wait(*service.handle);
+                if (service.exitCode == -1)
+                {
+                    service.exitCode = 1;
+                }
+            }
+            catch (Poco::Exception&)
+            {
+                service.exitCode = 1;
+            }
+            service.exitObserved = true;
+            return service.exitCode;
+        }
+
+        return -1;
+    }
+
+    bool restartManagedService(ManagedService& service)
+    {
+        if (_isShuttingDown || _stopServiceMonitor)
+        {
+            return false;
+        }
+
+        if (service.restartDelayMs > 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(service.restartDelayMs));
+            if (_isShuttingDown || _stopServiceMonitor)
+            {
+                return false;
+            }
+        }
+
+        try
+        {
+            Poco::ProcessHandle handle =
+#if defined(_WIN32)
+                service.forceShowWindow
+                ? launchManagedServiceWithWindow(service.command, service.arguments, service.workingDirectory)
+                :
+#endif
+                Poco::Process::launch(
+                    service.command,
+                    service.arguments,
+                    service.workingDirectory);
+
+            service.handle = std::make_unique<Poco::ProcessHandle>(handle);
+            service.processId = handle.id();
+            service.exitObserved = false;
+            service.exitCode = -1;
+
+#if defined(_WIN32)
+            assignManagedServiceToJob(service);
+            if (service.forceShowWindow)
+            {
+                ensureManagedServiceWindowVisible(service);
+            }
+#endif
+
+            logger().warning(
+                "Restarted keep-alive service \"%s\" (pid=%d).",
+                service.id,
+                static_cast<int>(service.handle->id()));
+
+            if (_pTelemetryService)
+            {
+                Poco::OpenTelemetry::TelemetryClient telemetry(_pTelemetryService);
+                telemetry.metric(
+                    "application.service.restart",
+                    1.0,
+                    "count",
+                    "Managed child service restart count",
+                    {{"service.id", service.id}});
+            }
+            return true;
+        }
+        catch (Poco::Exception& exc)
+        {
+            logger().error(
+                "Failed to restart keep-alive service \"%s\" from \"%s\": %s",
+                service.id,
+                service.command,
+                exc.displayText());
+            service.exitObserved = true;
+            return false;
+        }
+    }
+
+    void startManagedServiceMonitor()
+    {
+        if (_serviceMonitorThread.joinable())
+        {
+            return;
+        }
+
+        bool hasPrimaryManagedService = false;
+        for (const auto& service : _managedServices)
+        {
+            if (service.terminateServerOnExit && service.handle)
+            {
+                hasPrimaryManagedService = true;
+                break;
+            }
+        }
+
+        if (!hasPrimaryManagedService)
+        {
+            logger().warning("Managed service monitor not started: no primary managed service configured.");
+            return;
+        }
+
+        logger().information("Managed service monitor started.");
+        _stopServiceMonitor = false;
+        _serviceMonitorThread = std::thread([this]()
+        {
+            while (!_stopServiceMonitor)
+            {
+                try
+                {
+#if defined(_WIN32)
+                    if (_shutdownEvent)
+                    {
+                        const DWORD waitResult = WaitForSingleObject(_shutdownEvent, 200);
+                        if (waitResult == WAIT_OBJECT_0)
+                        {
+                            bool primaryServiceExited = false;
+                            {
+                                std::lock_guard<std::mutex> lock(_managedServicesMutex);
+                                for (auto& service : _managedServices)
+                                {
+                                    if (service.terminateServerOnExit && service.handle)
+                                    {
+                                        primaryServiceExited = observeServiceExit(service) != -1;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (primaryServiceExited)
+                            {
+                                logger().information("Managed shutdown requested by desktop shell.");
+                                if (!_isShuttingDown)
+                                {
+                                    Poco::Util::ServerApplication::terminate();
+                                }
+                                return;
+                            }
+
+                            ResetEvent(_shutdownEvent);
+                            logger().warning(
+                                "Ignored managed shutdown event because the primary desktop shell is still running.");
+                        }
+                    }
+#endif
+                    {
+                        std::lock_guard<std::mutex> lock(_managedServicesMutex);
+                        for (auto& service : _managedServices)
+                        {
+                            if (_stopServiceMonitor)
+                            {
+                                return;
+                            }
+
+                            if (!service.handle)
+                            {
+                                continue;
+                            }
+
+                            const int exitCode = observeServiceExit(service);
+                            if (exitCode == -1)
+                            {
+                                continue;
+                            }
+
+                            if (service.terminateServerOnExit)
+                            {
+                                logger().information(
+                                    "Primary managed service \"%s\" exited with code %d. Shutting down macchina.",
+                                    service.id,
+                                    exitCode);
+
+                                if (!_isShuttingDown)
+                                {
+                                    Poco::Util::ServerApplication::terminate();
+                                }
+                                return;
+                            }
+
+                            if (service.keepAlive)
+                            {
+                                logger().warning(
+                                    "Keep-alive service \"%s\" exited with code %d. Restarting.",
+                                    service.id,
+                                    exitCode);
+                                restartManagedService(service);
+                            }
+                        }
+                    }
+                }
+                catch (Poco::Exception& exc)
+                {
+                    logger().error("Managed service monitor error: %s", exc.displayText());
+                }
+                catch (std::exception& exc)
+                {
+                    logger().error("Managed service monitor error: %s", std::string(exc.what()));
+                }
+                catch (...)
+                {
+                    logger().error("Managed service monitor error: unknown exception.");
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        });
+    }
+
+    void stopManagedServiceMonitor()
+    {
+        _stopServiceMonitor = true;
+        if (_serviceMonitorThread.joinable())
+        {
+            _serviceMonitorThread.join();
+        }
     }
 
     void stopManagedServices()
@@ -405,7 +1306,9 @@ protected:
 
             try
             {
-                if (Poco::Process::isRunning(*it->handle))
+                int exitCode = observeServiceExit(*it);
+
+                if (exitCode == -1 && Poco::Process::isRunning(*it->handle))
                 {
                     if (it->gracefulStop)
                     {
@@ -421,7 +1324,8 @@ protected:
                         }
                     }
 
-                    if (Poco::Process::isRunning(*it->handle))
+                    exitCode = observeServiceExit(*it);
+                    if (exitCode == -1 && Poco::Process::isRunning(*it->handle))
                     {
                         logger().information(
                             "Force-stopping service \"%s\" (pid=%d).",
@@ -431,9 +1335,16 @@ protected:
                     }
                 }
 
+                if (exitCode == -1)
+                {
+                    exitCode = Poco::Process::wait(*it->handle);
+                    it->exitObserved = true;
+                    it->exitCode = exitCode;
+                }
+
                 telemetry.metric(
                     "application.service.exit_code",
-                    static_cast<double>(Poco::Process::wait(*it->handle)),
+                    static_cast<double>(exitCode),
                     "count",
                     "Exit code observed while shutting down a managed child service",
                     {{"service.id", it->id}});
@@ -450,6 +1361,204 @@ protected:
         _managedServices.clear();
         activity.success("services stopped");
     }
+
+#if defined(_WIN32)
+    Poco::ProcessHandle launchManagedServiceWithWindow(
+        const std::string& command,
+        const std::vector<std::string>& arguments,
+        const std::string& workingDirectory)
+    {
+        STARTUPINFOW startupInfo{};
+        startupInfo.cb = sizeof(startupInfo);
+        startupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        startupInfo.wShowWindow = SW_SHOWNORMAL;
+
+        PROCESS_INFORMATION processInformation{};
+        std::wstring applicationPath = widenString(command);
+        std::string commandLine = buildCommandLine(command, arguments);
+        std::wstring commandLineWide = widenString(commandLine);
+        std::vector<wchar_t> commandBuffer(commandLineWide.begin(), commandLineWide.end());
+        commandBuffer.push_back(L'\0');
+        std::wstring workingDirectoryWide = widenString(workingDirectory);
+
+        if (!CreateProcessW(
+                applicationPath.c_str(),
+                commandBuffer.data(),
+                nullptr,
+                nullptr,
+                FALSE,
+                0,
+                nullptr,
+                workingDirectoryWide.empty() ? nullptr : workingDirectoryWide.c_str(),
+                &startupInfo,
+                &processInformation))
+        {
+            throw Poco::SystemException(
+                Poco::format(
+                    "CreateProcessW failed for \"%s\"",
+                    command));
+        }
+
+        CloseHandle(processInformation.hThread);
+        return NativeProcessHandle(processInformation.hProcess, processInformation.dwProcessId);
+    }
+
+    void ensureManagedServiceWindowVisible(const ManagedService& service)
+    {
+        if (!service.handle)
+        {
+            return;
+        }
+
+        const DWORD processId = static_cast<DWORD>(service.handle->id());
+        std::thread([processId]()
+        {
+            for (int attempt = 0; attempt < 100; ++attempt)
+            {
+                WindowSearchContext context;
+                context.processId = processId;
+                EnumWindows(FindTopLevelWindowForProcess, reinterpret_cast<LPARAM>(&context));
+                if (context.window)
+                {
+                    AllowSetForegroundWindow(processId);
+                    ShowWindow(context.window, SW_SHOWMAXIMIZED);
+                    SetWindowPos(
+                        context.window,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                    SetForegroundWindow(context.window);
+                    return;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }).detach();
+    }
+
+    bool ensureManagedServiceJob()
+    {
+        if (_managedServicesJob)
+        {
+            return true;
+        }
+
+        HANDLE job = CreateJobObjectW(nullptr, nullptr);
+        if (!job)
+        {
+            logger().warning(
+                "Failed to create managed-service job object: error %lu.",
+                static_cast<unsigned long>(GetLastError()));
+            return false;
+        }
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limitInfo{};
+        limitInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limitInfo,
+                sizeof(limitInfo)))
+        {
+            const DWORD errorCode = GetLastError();
+            CloseHandle(job);
+            logger().warning(
+                "Failed to configure managed-service job object: error %lu.",
+                static_cast<unsigned long>(errorCode));
+            return false;
+        }
+
+        _managedServicesJob = job;
+        return true;
+    }
+
+    bool ensureShutdownEvent()
+    {
+        if (_shutdownEvent)
+        {
+            ResetEvent(_shutdownEvent);
+            return true;
+        }
+
+        HANDLE eventHandle = CreateEventW(nullptr, TRUE, FALSE, shutdownEventName());
+        if (!eventHandle)
+        {
+            logger().warning(
+                "Failed to create managed shutdown event: error %lu.",
+                static_cast<unsigned long>(GetLastError()));
+            return false;
+        }
+
+        ResetEvent(eventHandle);
+        _shutdownEvent = eventHandle;
+        return true;
+    }
+
+    void assignManagedServiceToJob(const ManagedService& service)
+    {
+        if (!_managedServicesJob || !service.handle)
+        {
+            return;
+        }
+
+        HANDLE processHandle = OpenProcess(
+            PROCESS_SET_QUOTA | PROCESS_TERMINATE,
+            FALSE,
+            static_cast<DWORD>(service.handle->id()));
+        if (!processHandle)
+        {
+            logger().warning(
+                "Failed to open managed service \"%s\" (pid=%d) for job assignment: error %lu.",
+                service.id,
+                static_cast<int>(service.handle->id()),
+                static_cast<unsigned long>(GetLastError()));
+            return;
+        }
+
+        if (!AssignProcessToJobObject(_managedServicesJob, processHandle))
+        {
+            const DWORD errorCode = GetLastError();
+            if (errorCode == ERROR_ACCESS_DENIED)
+            {
+                logger().debug(
+                    "Managed service \"%s\" (pid=%d) is already attached to another job object.",
+                    service.id,
+                    static_cast<int>(service.handle->id()));
+            }
+            else
+            {
+                logger().warning(
+                    "Failed to assign managed service \"%s\" (pid=%d) to the shutdown job: error %lu.",
+                    service.id,
+                    static_cast<int>(service.handle->id()),
+                    static_cast<unsigned long>(errorCode));
+            }
+        }
+
+        CloseHandle(processHandle);
+    }
+
+    void closeManagedServiceJob()
+    {
+        if (_managedServicesJob)
+        {
+            CloseHandle(_managedServicesJob);
+            _managedServicesJob = nullptr;
+        }
+    }
+
+    void closeShutdownEvent()
+    {
+        if (_shutdownEvent)
+        {
+            CloseHandle(_shutdownEvent);
+            _shutdownEvent = nullptr;
+        }
+    }
+#endif
 
 	void configureOpenSSLRuntime()
 	{
@@ -475,6 +1584,36 @@ protected:
 		{
 			Poco::Environment::set("OPENSSL_MODULES", localModules.toString());
 		}
+	}
+
+	void detachConsoleWindow()
+	{
+#if defined(_WIN32)
+		if (_showHelp) return;
+
+		const bool hideConsoleWindow = config().getBool("macchina.hideConsoleWindow", true);
+		if (!hideConsoleWindow)
+		{
+			return;
+		}
+
+		HWND consoleWindow = GetConsoleWindow();
+		if (!consoleWindow)
+		{
+			return;
+		}
+
+		DWORD attachedProcessIds[2] = {};
+		const DWORD attachedProcessCount = GetConsoleProcessList(
+			attachedProcessIds,
+			static_cast<DWORD>(sizeof(attachedProcessIds) / sizeof(attachedProcessIds[0])));
+		if (attachedProcessCount <= 1)
+		{
+			ShowWindow(consoleWindow, SW_HIDE);
+		}
+
+		FreeConsole();
+#endif
 	}
 
 	class ErrorHandler: public Poco::ErrorHandler
@@ -559,10 +1698,12 @@ protected:
 		}
 
 		std::string settingsPath = loadSettings();
+		detachConsoleWindow();
 		configureOpenSSLRuntime();
 
 		ServerApplication::initialize(self);
 		installTelemetryService();
+		startConfigSubscription();
 
 		if (!settingsPath.empty() && !_showHelp)
 		{
@@ -604,7 +1745,14 @@ protected:
 
 	void uninitialize()
 	{
+        _isShuttingDown = true;
+        stopConfigSubscription();
+        stopManagedServiceMonitor();
         stopManagedServices();
+#if defined(_WIN32)
+        closeManagedServiceJob();
+        closeShutdownEvent();
+#endif
 		uninstallTelemetryService();
 		ServerApplication::uninitialize();
 	}
@@ -685,10 +1833,19 @@ private:
 	OSPSubsystem* _pOSP;
 	Poco::OSP::ServiceRef::Ptr _pTelemetryServiceRef;
 	Poco::OpenTelemetry::TelemetryService::Ptr _pTelemetryService;
+	std::unique_ptr<stok::services::common::TextMessageSubscriber> _configSubscriber;
 	Poco::AutoPtr<Poco::Channel> _pOriginalRootChannel;
 	Poco::AutoPtr<Poco::Channel> _pOriginalApplicationChannel;
 	Poco::AutoPtr<Poco::Channel> _pTelemetryRootChannel;
     std::vector<ManagedService> _managedServices;
+    std::mutex _managedServicesMutex;
+    std::thread _serviceMonitorThread;
+    std::atomic_bool _stopServiceMonitor{false};
+    std::atomic_bool _isShuttingDown{false};
+#if defined(_WIN32)
+    HANDLE _managedServicesJob = nullptr;
+    HANDLE _shutdownEvent = nullptr;
+#endif
 	bool _showHelp = false;
 	bool _skipDefaultConfig = false;
 	std::vector<std::string> _configs;
@@ -698,11 +1855,31 @@ int main(int argc, char** argv)
 {
 	try
 	{
+#if defined(_WIN32)
+		HANDLE singleInstanceMutex = CreateMutexW(nullptr, TRUE, L"Local\\StokMacchinaSingleInstance");
+		const bool alreadyRunning = singleInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS;
+		if (alreadyRunning)
+		{
+			if (!bringDesktopShellToForeground())
+			{
+				launchDesktopShellForExistingInstance();
+			}
+			CloseHandle(singleInstanceMutex);
+			return Poco::Util::Application::EXIT_OK;
+		}
+#endif
 		int rc = Poco::Util::Application::EXIT_SOFTWARE;
 		{
 			MacchinaServer app;
 			rc = app.run(argc, argv);
 		}
+#if defined(_WIN32)
+		if (singleInstanceMutex)
+		{
+			ReleaseMutex(singleInstanceMutex);
+			CloseHandle(singleInstanceMutex);
+		}
+#endif
 		std::_Exit(rc);
 	}
 	catch (Poco::Exception& exc)

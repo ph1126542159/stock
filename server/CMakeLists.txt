@@ -10,13 +10,40 @@ target_link_libraries(macchina
         Poco::JSON
         Poco::XML
         Poco::Foundation
+        stok_services_common
 )
 
 if(TARGET Poco::OpenTelemetry)
     target_link_libraries(macchina PRIVATE Poco::OpenTelemetry)
 endif()
 
+if(TARGET stok_market_data_service)
+    add_dependencies(macchina stok_market_data_service)
+endif()
+
+if(TARGET stok_desktop_shell)
+    add_dependencies(macchina stok_desktop_shell)
+endif()
+
+if(TARGET stok_market_board)
+    add_dependencies(macchina stok_market_board)
+endif()
+
+if(TARGET stok_config_center)
+    add_dependencies(macchina stok_config_center)
+endif()
+
+if(TARGET stok_log_viewer)
+    add_dependencies(macchina stok_log_viewer)
+endif()
+
+if(TARGET stok_portfolio_board)
+    add_dependencies(macchina stok_portfolio_board)
+endif()
+
 add_custom_command(TARGET macchina POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "$<TARGET_FILE_DIR:macchina>/logs"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/macchina.properties"
         "$<TARGET_FILE_DIR:macchina>/macchina.properties"

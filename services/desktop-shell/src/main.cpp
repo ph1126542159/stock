@@ -1,16 +1,26 @@
 #include "DesktopShellController.h"
+#include "LocalizationController.h"
 
-#include "QQmlApplicationEngine"
-#include "QQmlContext"
 #include "QCommandLineOption"
 #include "QCommandLineParser"
 #include "QDir"
 #include "QGuiApplication"
+#include "QQmlApplicationEngine"
+#include "QQmlContext"
+#include "QQuickWindow"
+#include "QTimer"
 #include "stok/services/common/ServiceConfig.h"
 #include "stok/services/common/TelemetryBootstrap.h"
 
 int main(int argc, char* argv[])
 {
+    // The shell embeds foreign HWNDs as WS_CHILD windows of its own. The
+    // default D3D11/RHI scene graph paints over the entire client area
+    // every frame and ignores WS_CLIPCHILDREN, which hides the embedded
+    // child. The software scene graph honors WS_CLIPCHILDREN, so the child
+    // becomes visible inside the contentFrame region.
+    QQuickWindow::setSceneGraphBackend(QStringLiteral("software"));
+
     QGuiApplication app(argc, argv);
     QCoreApplication::setApplicationName("stok");
     QCoreApplication::setOrganizationName("stok");
@@ -40,16 +50,30 @@ int main(int argc, char* argv[])
     telemetry.install();
     telemetry.recordStartup("qml-shell", {{"dds.topic", ddsSettings.topicName}});
 
-    DesktopShellController controller(identity, ddsSettings, configuration, telemetry);
-    controller.start();
+    LocalizationController localization;
+    {
+        auto localeSettings = stok::services::common::readDdsSettings(*configuration);
+        localeSettings.topicName = configuration->getString("dds.localeTopic", "stok.ui.locale");
+        localization.startBroadcast(localeSettings, identity.name + "-locale-publisher");
+    }
+
+    DesktopShellController controller(
+        identity,
+        ddsSettings,
+        QString::fromStdString(configPath),
+        configuration,
+        telemetry,
+        localization);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("shellController", &controller);
+    engine.rootContext()->setContextProperty("localizationController", &localization);
     engine.loadFromModule("StokDesktopShell", "Main");
     if (engine.rootObjects().isEmpty())
     {
         return -1;
     }
 
+    QTimer::singleShot(0, &controller, &DesktopShellController::start);
     return app.exec();
 }

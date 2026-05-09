@@ -359,3 +359,7 @@ if(MYIOT_ENABLE_WEBUI AND EXISTS "${CMAKE_SOURCE_DIR}/webUI/CMakeLists.txt")
 endif()
 add_subdirectory(services)
 add_subdirectory(server)
+
+# Bundles a self-contained Python interpreter + AKShare so the value-investment
+# board's data provider works on any Windows machine without installing Python.
+include("${CMAKE_SOURCE_DIR}/cmake/StokPythonBundle.cmake")

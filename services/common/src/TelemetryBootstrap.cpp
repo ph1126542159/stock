@@ -1,5 +1,8 @@
 #include "stok/services/common/TelemetryBootstrap.h"
 
+#include "Poco/DateTimeFormatter.h"
+#include "Poco/JSON/Object.h"
+#include "Poco/Message.h"
 #include "Poco/ConsoleChannel.h"
 #include "Poco/Environment.h"
 #include "Poco/File.h"
@@ -10,8 +13,76 @@
 #include "Poco/PatternFormatter.h"
 #include "Poco/Process.h"
 #include "Poco/SplitterChannel.h"
+#include <sstream>
 
 namespace stok::services::common {
+
+namespace {
+
+const char* priority_name(Poco::Message::Priority priority)
+{
+    switch (priority)
+    {
+    case Poco::Message::PRIO_FATAL:
+        return "Fatal";
+    case Poco::Message::PRIO_CRITICAL:
+        return "Critical";
+    case Poco::Message::PRIO_ERROR:
+        return "Error";
+    case Poco::Message::PRIO_WARNING:
+        return "Warning";
+    case Poco::Message::PRIO_NOTICE:
+        return "Notice";
+    case Poco::Message::PRIO_INFORMATION:
+        return "Information";
+    case Poco::Message::PRIO_DEBUG:
+        return "Debug";
+    case Poco::Message::PRIO_TRACE:
+        return "Trace";
+    default:
+        return "Information";
+    }
+}
+
+class DdsLogChannel final : public Poco::Channel
+{
+public:
+    DdsLogChannel(TextMessagePublisher& publisher, std::string serviceName):
+        publisher_(publisher),
+        serviceName_(std::move(serviceName))
+    {
+    }
+
+    void log(const Poco::Message& message) override
+    {
+        Poco::JSON::Object object;
+        object.set("service", serviceName_);
+        object.set("source", message.getSource());
+        object.set("level", priority_name(message.getPriority()));
+        object.set("text", message.getText());
+        object.set(
+            "timestamp",
+            Poco::DateTimeFormatter::format(
+                message.getTime(),
+                Poco::DateTimeFormat::ISO8601_FRAC_FORMAT));
+        object.set("thread", message.getTid());
+
+        std::ostringstream stream;
+        object.stringify(stream);
+
+        TextMessage payload;
+        payload.payload = stream.str();
+        payload.timestampMs = message.getTime().epochMicroseconds() / 1000;
+        std::string error;
+        publisher_.publish(payload, &error);
+    }
+
+private:
+    TextMessagePublisher& publisher_;
+    std::string serviceName_;
+};
+
+} // namespace
 
 ServiceTelemetry::ServiceTelemetry(
     ServiceIdentity identity,
@@ -96,6 +167,12 @@ void ServiceTelemetry::uninstall()
     }
 
     telemetryService_ = nullptr;
+    ddsLogChannel_ = nullptr;
+    if (logPublisher_)
+    {
+        logPublisher_->stop();
+        logPublisher_.reset();
+    }
     installedChannel_ = nullptr;
     originalServiceChannel_ = nullptr;
     originalRootChannel_ = nullptr;

@@ -31,6 +31,7 @@
 #include "fastdds/dds/topic/TypeSupport.hpp"
 #include "fastdds/dds/topic/qos/TopicQos.hpp"
 #include "fastdds/rtps/transport/shared_mem/SharedMemTransportDescriptor.hpp"
+#include "fastdds/rtps/transport/UDPv4TransportDescriptor.hpp"
 #include <chrono>
 #include <limits>
 #include <memory>
@@ -56,6 +57,7 @@ using eprosima::fastdds::dds::TopicDataType;
 using eprosima::fastdds::dds::TypeSupport;
 using eprosima::fastdds::rtps::SerializedPayload_t;
 using eprosima::fastdds::rtps::SharedMemTransportDescriptor;
+using eprosima::fastdds::rtps::UDPv4TransportDescriptor;
 
 constexpr std::uint32_t kEncapsulationSize = 4u;
 constexpr std::uint32_t kMaxSymbolSize = 32u;
@@ -210,11 +212,14 @@ void configure_participant_qos(
     const stok::services::common::DdsSettings& settings,
     const std::string& participantName)
 {
+    static_cast<void>(settings);
     participantQos.name(participantName);
-    auto shmTransport = std::make_shared<SharedMemTransportDescriptor>();
-    shmTransport->segment_size(settings.segmentSize);
-    shmTransport->port_queue_capacity(settings.portQueueCapacity);
-    participantQos.transport().user_transports.push_back(shmTransport);
+    // On Windows, Fast-DDS scans %ProgramData%\eprosima\fastdds_interprocess on
+    // participant creation. Crashed/force-killed processes leave segments behind,
+    // and after a few thousand orphans the scan can hang for minutes. Force a
+    // UDPv4-only transport so the SHM transport is never created.
+    auto udpTransport = std::make_shared<UDPv4TransportDescriptor>();
+    participantQos.transport().user_transports.push_back(udpTransport);
     participantQos.transport().use_builtin_transports = false;
 }
 
