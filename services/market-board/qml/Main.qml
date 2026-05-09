@@ -720,6 +720,95 @@ ApplicationWindow {
         rebuildInvestmentReferencePages()
     }
 
+    // Map the unified market_overview_provider snapshot into the existing
+    // QML data properties so every section gets fresh real data without
+    // depending on the flaky eastmoney push2 endpoint.
+    function applyMarketOverviewSnapshot(snap) {
+        if (!snap) return
+        const indices = snap.indices || []
+        if (indices.length > 0) {
+            const codeOrder = {"000001.SH":0,"399001.SZ":1,"399006.SZ":2,"000688.SH":3,"000300.SH":4,"000905.SH":5,"000985.SH":6,"HSTECH.HK":7}
+            const next = domesticIndexRows.slice()
+            for (let i = 0; i < indices.length; ++i) {
+                const it = indices[i]
+                const idx = codeOrder[it.code]
+                if (idx === undefined || !next[idx]) continue
+                const row = next[idx]
+                const change = Number(it.changePct || 0)
+                const upCount = Number(it.upCount || 0)
+                const downCount = Number(it.downCount || 0)
+                const total = Math.max(1, upCount + downCount)
+                const breadth = Math.round(upCount * 100 / total)
+                const momentum = Math.max(1, Math.min(99, Math.round(breadth * 0.58 + (change + 2.5) * 11)))
+                const turnover = Math.max(0, Math.round(Number(it.amount || 0) / 100000000))
+                const price = Number(it.lastPrice || 0)
+                row.value = window.formatIndexValue(price)
+                row.change = change
+                row.breadth = breadth
+                row.momentum = momentum
+                row.turnover = turnover
+                row.support = window.formatIndexValue(price * (1 - Math.max(0.006, Math.min(0.025, (100 - breadth) / 3600))))
+                row.resistance = window.formatIndexValue(price * (1 + Math.max(0.008, Math.min(0.032, breadth / 3000))))
+                row.risk = window.indexRiskLabel(change, breadth)
+                row.tomorrow = window.tomorrowBias(change, breadth, momentum)
+                row.tone = change >= 1.0 ? "强势上行" : (change >= 0.2 ? "震荡偏强" : (change > -0.6 ? "横盘观察" : "风险降温"))
+                row.name = it.name || row.name
+                const closes30d = it.closes30d || []
+                if (closes30d.length > 0) {
+                    row.series = closes30d.slice(Math.max(0, closes30d.length - 32))
+                } else if (price > 0) {
+                    row.series = window.appendRealIndexPoint(row, price)
+                }
+            }
+            domesticIndexRows = next
+            domesticIndexStatus = "实时行情：" + (snap.generatedAtIso || Qt.formatDateTime(new Date(), "HH:mm:ss")) + " 腾讯/新浪/akshare"
+        }
+
+        // Map sectors -> sectorMoneyFlowRows so 资金流向/行业轮动 page has data
+        const sectors = snap.sectors || []
+        if (sectors.length > 0) {
+            const flowRows = []
+            for (let i = 0; i < Math.min(20, sectors.length); ++i) {
+                const s = sectors[i]
+                flowRows.push({
+                    rank: i + 1,
+                    code: s.label || "",
+                    name: s.name || "",
+                    netMain: Number(s.turnover || 0),  // 总成交额 in CNY
+                    netMainPct: Number(s.changePct || 0),
+                    superFlow: 0,
+                    bigFlow: 0,
+                    updatedAt: 0,
+                    leaderCode: s.leaderCode || "",
+                    leaderName: s.leaderName || "",
+                    leaderChange: Number(s.leaderChange || 0)
+                })
+            }
+            sectorMoneyFlowRows = flowRows
+            sectorMoneyFlowStatus = "行业板块：" + sectors.length + " 行业 / 新浪行情"
+        }
+
+        // Map preannouncements -> cninfoAnnouncementRows additions if cninfo failed
+        const earnings = snap.earnings || {}
+        const pres = earnings.preannouncements || []
+        if (pres.length > 0 && cninfoAnnouncementRows.length === 0) {
+            const annRows = []
+            for (let i = 0; i < Math.min(30, pres.length); ++i) {
+                const p = pres[i]
+                annRows.push({
+                    title: p.summary || (p.metric + " " + p.type),
+                    stock: p.name || "",
+                    code: p.code || "",
+                    date: p.noticeDate || ""
+                })
+            }
+            cninfoAnnouncementRows = annRows
+            cninfoStatus = "业绩预告：" + pres.length + " 条 / akshare"
+        }
+
+        rebuildInvestmentReferencePages()
+    }
+
     function fetchEastmoneyIndexes(secids) {
         const request = new XMLHttpRequest()
         request.onreadystatechange = function() {
@@ -781,6 +870,9 @@ ApplicationWindow {
         }
         function onFundHoldingsChanged() {
             window.rebuildInvestmentReferencePages()
+        }
+        function onMarketOverviewChanged() {
+            window.applyMarketOverviewSnapshot(marketBoardController.marketOverviewSnapshot)
         }
     }
 

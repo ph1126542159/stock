@@ -421,6 +421,9 @@ MarketBoardController::MarketBoardController(
     fundHoldingsScriptPath_ = resolve_free_data_provider_script(
         configPath_,
         configuration_->getString("fundHoldings.provider.script", "../../tools/fund_holdings_provider.py"));
+    marketOverviewScriptPath_ = resolve_free_data_provider_script(
+        configPath_,
+        configuration_->getString("marketOverview.provider.script", "../../tools/market_overview_provider.py"));
     telemetry_.logger().information(
         QStringLiteral("Python interpreter: %1; value-board script: %2; free-data script: %3")
             .arg(valueBoardProviderCommand_, valueBoardProviderScriptPath_, freeDataProviderScriptPath_)
@@ -469,6 +472,13 @@ MarketBoardController::MarketBoardController(
     freeDataRefreshTimer_ = new QTimer(this);
     freeDataRefreshTimer_->setInterval(freeDataRefreshIntervalMs_);
     connect(freeDataRefreshTimer_, &QTimer::timeout, this, &MarketBoardController::refreshFreeDataProvider);
+
+    // Pull the unified market overview every 30s. The provider hits Tencent
+    // qt.gtimg.cn + Sina + AKShare so it works even when eastmoney push2 is
+    // returning 502 (which is the case at time of writing).
+    marketOverviewTimer_ = new QTimer(this);
+    marketOverviewTimer_->setInterval(30 * 1000);
+    connect(marketOverviewTimer_, &QTimer::timeout, this, &MarketBoardController::refreshMarketOverview);
 
     networkAccess_ = new QNetworkAccessManager(this);
 }
@@ -767,6 +777,91 @@ void MarketBoardController::requestFundHoldings(const QString& fundCode)
     });
 }
 
+// Unified market overview snapshot ---------------------------------------------------
+
+QVariantMap MarketBoardController::marketOverviewSnapshot() const
+{
+    return marketOverviewSnapshot_;
+}
+
+QString MarketBoardController::marketOverviewStatus() const
+{
+    return marketOverviewStatus_;
+}
+
+void MarketBoardController::refreshMarketOverview()
+{
+    if (marketOverviewRequestInFlight_) return;
+    if (valueBoardProviderCommand_.isEmpty() || marketOverviewScriptPath_.isEmpty()) return;
+    if (!QFileInfo::exists(marketOverviewScriptPath_)) return;
+
+    marketOverviewRequestInFlight_ = true;
+    if (marketOverviewSnapshot_.isEmpty())
+    {
+        marketOverviewStatus_ = QStringLiteral(u"行情概览：正在抓取实时数据...");
+        emit marketOverviewChanged();
+    }
+
+    auto* process = new QProcess(this);
+    QStringList args;
+    if (valueBoardProviderCommand_ == QStringLiteral("py")) args << QStringLiteral("-3");
+    args << marketOverviewScriptPath_ << QStringLiteral("--json");
+    process->setWorkingDirectory(QFileInfo(marketOverviewScriptPath_).absolutePath());
+    process->setProcessChannelMode(QProcess::SeparateChannels);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert("PYTHONIOENCODING", "utf-8");
+    process->setProcessEnvironment(env);
+
+    QPointer<MarketBoardController> guard(this);
+    connect(process, &QProcess::finished, this,
+        [this, guard, process](int exitCode, QProcess::ExitStatus)
+    {
+        const QString out = QString::fromUtf8(process->readAllStandardOutput());
+        const QString err = QString::fromUtf8(process->readAllStandardError());
+        process->deleteLater();
+        if (!guard) return;
+
+        marketOverviewRequestInFlight_ = false;
+        if (exitCode != 0)
+        {
+            marketOverviewStatus_ = QStringLiteral(u"行情概览：抓取失败（退出 %1）%2")
+                .arg(exitCode).arg(err.left(100));
+            emit marketOverviewChanged();
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        {
+            marketOverviewStatus_ = QStringLiteral(u"行情概览：解析失败 %1").arg(parseError.errorString());
+            emit marketOverviewChanged();
+            return;
+        }
+        marketOverviewSnapshot_ = doc.object().toVariantMap();
+        const QJsonObject root = doc.object();
+        const int idxCount = root.value(QStringLiteral("indices")).toArray().size();
+        const int sectorCount = root.value(QStringLiteral("sectors")).toArray().size();
+        marketOverviewStatus_ = QStringLiteral(u"行情概览：%1 指数 / %2 行业 / %3")
+            .arg(idxCount).arg(sectorCount)
+            .arg(root.value(QStringLiteral("generatedAtIso")).toString());
+        emit marketOverviewChanged();
+    });
+
+    process->start(valueBoardProviderCommand_, args);
+    if (!process->waitForStarted(3000))
+    {
+        process->deleteLater();
+        marketOverviewRequestInFlight_ = false;
+        marketOverviewStatus_ = QStringLiteral(u"行情概览：启动脚本失败");
+        emit marketOverviewChanged();
+        return;
+    }
+    QTimer::singleShot(2 * 60 * 1000, process, [process]()
+    {
+        if (process->state() != QProcess::NotRunning) process->kill();
+    });
+}
+
 void MarketBoardController::start()
 {
     QDir().mkpath(cacheDirectoryPath());
@@ -792,6 +887,12 @@ void MarketBoardController::start()
     }
 
     startFreeDataProvider();
+
+    // Kick off the unified market overview immediately and then keep
+    // refreshing every 30s. This is what populates the index / sector /
+    // northbound / PE-percentile / earnings sections.
+    refreshMarketOverview();
+    marketOverviewTimer_->start();
 
     // Auto-bootstrap a default selection so all dependent ReferencePage tabs
     // (Capital Flow / Valuation / Earnings / Fund Look-through / Risk /
