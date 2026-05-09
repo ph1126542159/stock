@@ -385,7 +385,19 @@ ApplicationWindow {
     }
 
     function appendRealIndexPoint(row, price) {
-        const nextSeries = (row.series || []).slice(Math.max(0, (row.series || []).length - 23))
+        // The seeded `series` arrays use 0-100 normalized placeholders so they
+        // could never be mixed with raw index levels (3,000+ for SHCOMP, 1,500+
+        // for ChiNext). Detect that pattern and discard the seed before
+        // appending the first real price; otherwise the sparkline maps the
+        // ~50 placeholders to the bottom of the chart and the new ~3,000
+        // price to the top -- producing a flat-bottom L shape that never
+        // changes meaningfully even as new ticks arrive.
+        let prior = row.series || []
+        const max = prior.reduce(function(m, v) { return v > m ? v : m }, 0)
+        if (prior.length === 12 && max < 200 && price > 200) {
+            prior = []
+        }
+        const nextSeries = prior.slice(Math.max(0, prior.length - 31))
         nextSeries.push(price)
         return nextSeries.length >= 2 ? nextSeries : [price, price]
     }
@@ -581,7 +593,7 @@ ApplicationWindow {
     }
 
     function refreshDomesticIndexes() {
-        fetchEastmoneyIndexes("1.000001,0.399001,0.399006,1.000688,1.000300,1.000905")
+        fetchEastmoneyIndexes("1.000001,0.399001,0.399006,1.000688,1.000300,1.000905,1.000985")
         fetchEastmoneyIndexes("100.HSTECH")
     }
 

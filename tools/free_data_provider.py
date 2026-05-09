@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 
-def request_json(url: str, *, method: str = "GET", data: str | None = None, headers: dict[str, str] | None = None) -> dict:
+def request_json(url: str, *, method: str = "GET", data: str | None = None, headers: dict[str, str] | None = None, retries: int = 3) -> dict:
     body = data.encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=body, method=method)
     req.add_header("User-Agent", "Mozilla/5.0 stok-free-data-provider")
@@ -24,8 +24,24 @@ def request_json(url: str, *, method: str = "GET", data: str | None = None, head
     if headers:
         for key, value in headers.items():
             req.add_header(key, value)
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    last_exc: Exception | None = None
+    # Eastmoney push2 occasionally returns 502 / 503 / 504 mid-day. Retry a
+    # couple of times with backoff so a single transient failure doesn't
+    # blank out the UI.
+    for attempt in range(max(1, retries)):
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                return json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code not in (500, 502, 503, 504):
+                raise
+        except Exception as exc:
+            last_exc = exc
+        time.sleep(0.8 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    return {}
 
 
 def eastmoney_sector_money_flow(limit: int) -> list[dict]:
