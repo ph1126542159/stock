@@ -28,6 +28,7 @@ class ValuationResearchController final : public QObject
     Q_PROPERTY(QVariantList researchRows READ researchRows NOTIFY dataChanged)
     Q_PROPERTY(QVariantList thesisRows READ thesisRows NOTIFY dataChanged)
     Q_PROPERTY(QStringList watchlist READ watchlist NOTIFY watchlistChanged)
+    Q_PROPERTY(QVariantList watchlistRich READ watchlistRich NOTIFY dataChanged)
     Q_PROPERTY(bool refreshing READ refreshing NOTIFY refreshingChanged)
     Q_PROPERTY(QString lastUpdatedText READ lastUpdatedText NOTIFY dataChanged)
     Q_PROPERTY(QString assumptionSummary READ assumptionSummary NOTIFY dataChanged)
@@ -48,6 +49,7 @@ public:
     QVariantList researchRows() const;
     QVariantList thesisRows() const;
     QStringList watchlist() const;
+    QVariantList watchlistRich() const;
     bool refreshing() const;
     QString lastUpdatedText() const;
     QString assumptionSummary() const;

@@ -84,23 +84,37 @@ ApplicationWindow {
     }
 
     component InfoRow: Rectangle {
+        id: infoRow
         required property var item
-        implicitHeight: 70
+        implicitHeight: infoCol.implicitHeight + 24
         radius: 8
         color: theme.panel2
         border.color: theme.line
         RowLayout {
             anchors.fill: parent
-            anchors.margins: 14
+            anchors.margins: 12
             spacing: 12
-            Rectangle { Layout.preferredWidth: 4; Layout.fillHeight: true; radius: 2; color: toneColor(item.tone || "blue") }
+            Rectangle { Layout.preferredWidth: 4; Layout.fillHeight: true; radius: 2; color: toneColor(infoRow.item.tone || "blue") }
             ColumnLayout {
+                id: infoCol
                 Layout.fillWidth: true
-                spacing: 4
-                Text { text: item.title; color: theme.text; font.pixelSize: 15; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                Text { text: (item.evidence ? item.evidence + "  " : "") + item.detail; color: theme.muted; font.pixelSize: 13; Layout.fillWidth: true; wrapMode: Text.WordWrap; maximumLineCount: 2 }
+                spacing: 6
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Text { text: infoRow.item.title; color: theme.text; font.family: "Microsoft YaHei UI"; font.pixelSize: 15; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+                    Rectangle {
+                        Layout.preferredWidth: 36
+                        Layout.preferredHeight: 22
+                        radius: 11
+                        color: Qt.rgba(toneColor(infoRow.item.tone || "blue").r, toneColor(infoRow.item.tone || "blue").g, toneColor(infoRow.item.tone || "blue").b, 0.18)
+                        border.color: toneColor(infoRow.item.tone || "blue")
+                        Text { anchors.centerIn: parent; text: infoRow.item.tag || infoRow.item.step || ""; color: toneColor(infoRow.item.tone || "blue"); font.family: "Microsoft YaHei UI"; font.pixelSize: 12; font.bold: true }
+                    }
+                }
+                Text { text: infoRow.item.detail; color: theme.text; font.family: "Microsoft YaHei UI"; font.pixelSize: 13; Layout.fillWidth: true; wrapMode: Text.WordWrap; lineHeight: 1.3 }
+                Text { visible: !!infoRow.item.evidence; text: "▸ " + (infoRow.item.evidence || ""); color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             }
-            Text { text: item.tag || item.step; color: toneColor(item.tone || "blue"); font.pixelSize: 13; font.bold: true; Layout.preferredWidth: 52; horizontalAlignment: Text.AlignRight }
         }
     }
 
@@ -296,32 +310,106 @@ ApplicationWindow {
                         ListView {
                             id: watchlistView
                             Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(220, contentHeight)
+                            Layout.fillHeight: true
+                            Layout.preferredHeight: Math.max(140, Math.min(360, contentHeight))
                             clip: true
-                            spacing: 4
-                            model: pageController.watchlist
+                            spacing: 6
+                            model: pageController.watchlistRich
                             delegate: Rectangle {
                                 id: watchRow
-                                required property string modelData
+                                required property var modelData
                                 width: ListView.view.width
-                                implicitHeight: 32
+                                implicitHeight: watchRowCol.implicitHeight + 16
                                 radius: 6
                                 color: "#0c1520"
-                                border.color: "#1c2a3c"
-                                RowLayout {
+                                border.color: watchRow.modelData.tone === "red" ? Qt.rgba(theme.red.r, theme.red.g, theme.red.b, 0.45)
+                                            : watchRow.modelData.tone === "green" ? Qt.rgba(theme.green.r, theme.green.g, theme.green.b, 0.45)
+                                            : "#1c2a3c"
+                                ColumnLayout {
+                                    id: watchRowCol
                                     anchors.fill: parent
-                                    anchors.leftMargin: 10
-                                    anchors.rightMargin: 6
-                                    spacing: 8
-                                    Text { text: watchRow.modelData; color: theme.text; font.family: "Consolas"; font.pixelSize: 13; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    Button {
-                                        id: removeBtn
-                                        Layout.preferredWidth: 50
-                                        Layout.preferredHeight: 22
-                                        text: "移除"
-                                        onClicked: pageController.removeSymbol(watchRow.modelData)
-                                        background: Rectangle { radius: 4; color: removeBtn.down ? "#5a1f1f" : "#2a1414"; border.color: theme.red }
-                                        contentItem: Text { text: removeBtn.text; color: theme.red; font.family: "Microsoft YaHei UI"; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                    anchors.margins: 8
+                                    spacing: 4
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Text {
+                                            text: watchRow.modelData.displayCode || watchRow.modelData.spec
+                                            color: theme.accent
+                                            font.family: "Consolas"
+                                            font.pixelSize: 12
+                                            font.bold: true
+                                            Layout.preferredWidth: 78
+                                        }
+                                        Text {
+                                            text: watchRow.modelData.pending ? "（等待估值）" : (watchRow.modelData.name || "")
+                                            color: theme.text
+                                            font.family: "Microsoft YaHei UI"
+                                            font.pixelSize: 13
+                                            font.bold: true
+                                            Layout.fillWidth: true
+                                            elide: Text.ElideRight
+                                        }
+                                        Button {
+                                            id: removeBtn
+                                            Layout.preferredWidth: 38
+                                            Layout.preferredHeight: 20
+                                            text: "✕"
+                                            onClicked: pageController.removeSymbol(watchRow.modelData.spec)
+                                            background: Rectangle { radius: 4; color: removeBtn.down ? "#5a1f1f" : "#2a1414"; border.color: theme.red }
+                                            contentItem: Text { text: removeBtn.text; color: theme.red; font.family: "Microsoft YaHei UI"; font.pixelSize: 12; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: !watchRow.modelData.pending
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        Text {
+                                            text: "现价 " + Number(watchRow.modelData.lastPrice || 0).toFixed(2)
+                                            color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 11
+                                            Layout.preferredWidth: 90
+                                        }
+                                        Text {
+                                            text: "合理 " + Number(watchRow.modelData.fairValue || 0).toFixed(2)
+                                            color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 11
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                    RowLayout {
+                                        visible: !watchRow.modelData.pending
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        Rectangle {
+                                            Layout.preferredWidth: 70
+                                            Layout.preferredHeight: 22
+                                            radius: 4
+                                            color: Qt.rgba(toneColor(watchRow.modelData.tone || "blue").r, toneColor(watchRow.modelData.tone || "blue").g, toneColor(watchRow.modelData.tone || "blue").b, 0.18)
+                                            border.color: toneColor(watchRow.modelData.tone || "blue")
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: (Number(watchRow.modelData.margin || 0) >= 0 ? "+" : "") + Number(watchRow.modelData.margin || 0).toFixed(1) + "%"
+                                                color: toneColor(watchRow.modelData.tone || "blue")
+                                                font.family: "Microsoft YaHei UI"; font.pixelSize: 12; font.bold: true
+                                            }
+                                        }
+                                        Text {
+                                            text: "PE " + Number(watchRow.modelData.pe || 0).toFixed(1)
+                                            color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 11
+                                            Layout.preferredWidth: 56
+                                        }
+                                        Text {
+                                            text: "ROE " + Number(watchRow.modelData.roe || 0).toFixed(1) + "%"
+                                            color: theme.muted; font.family: "Microsoft YaHei UI"; font.pixelSize: 11
+                                            Layout.preferredWidth: 76
+                                        }
+                                        Text {
+                                            text: watchRow.modelData.action || ""
+                                            color: toneColor(watchRow.modelData.tone || "blue")
+                                            font.family: "Microsoft YaHei UI"; font.pixelSize: 11; font.bold: true
+                                            Layout.fillWidth: true
+                                            horizontalAlignment: Text.AlignRight
+                                        }
                                     }
                                 }
                             }

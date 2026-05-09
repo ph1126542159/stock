@@ -284,6 +284,56 @@ QVariantList ValuationResearchController::valuationRows() const { return valuati
 QVariantList ValuationResearchController::researchRows() const { return researchRows_; }
 QVariantList ValuationResearchController::thesisRows() const { return thesisRows_; }
 QStringList ValuationResearchController::watchlist() const { return watchlist_; }
+
+QVariantList ValuationResearchController::watchlistRich() const
+{
+    // Build {spec, displayCode, name, lastPrice, fairValue, margin, action,
+    // tone, score} for every watchlist entry, joined with the latest
+    // valuation_assets row when one exists. Entries that have not been
+    // valued yet still show up so the user knows they are pending.
+    QVariantList out;
+    for (const QString& spec : watchlist_)
+    {
+        QVariantMap row;
+        row["spec"] = spec;
+        row["displayCode"] = spec;
+        row["name"] = QString();
+        row["lastPrice"] = 0.0;
+        row["fairValue"] = 0.0;
+        row["margin"] = 0.0;
+        row["action"] = QStringLiteral(u"等待估值");
+        row["tone"] = QStringLiteral("blue");
+        row["compositeScore"] = 0.0;
+        row["pe"] = 0.0;
+        row["roe"] = 0.0;
+        row["methodology"] = QString();
+        row["pending"] = true;
+        for (const QVariant& v : valuationRows_)
+        {
+            const QVariantMap m = v.toMap();
+            const QString thisSpec = QStringLiteral("%1:%2")
+                .arg(m.value("market").toString(), m.value("symbol").toString());
+            if (thisSpec == spec)
+            {
+                row["displayCode"] = m.value("displayCode");
+                row["name"] = m.value("name");
+                row["lastPrice"] = m.value("lastPrice");
+                row["fairValue"] = m.value("fairValue");
+                row["margin"] = m.value("margin");
+                row["action"] = m.value("action");
+                row["tone"] = m.value("tone");
+                row["compositeScore"] = m.value("compositeScore");
+                row["pe"] = m.value("pe");
+                row["roe"] = m.value("roe");
+                row["methodology"] = m.value("methodology");
+                row["pending"] = false;
+                break;
+            }
+        }
+        out.append(row);
+    }
+    return out;
+}
 bool ValuationResearchController::refreshing() const { return refreshing_; }
 
 QString ValuationResearchController::lastUpdatedText() const
@@ -490,6 +540,7 @@ void ValuationResearchController::loadFromDatabase()
         generatedAt_ = QDateTime::fromString(meta.value(0).toString(), Qt::ISODate);
     }
     rebuildAggregates();
+    rebuildResearchAndThesis();
     emit dataChanged();
 }
 
@@ -644,6 +695,7 @@ void ValuationResearchController::onProviderFinished(int exitCode, const QString
     generatedAt_ = QDateTime::currentDateTime();
     saveToDatabase(parsed, generatedAt_);
     rebuildAggregates();
+    rebuildResearchAndThesis();
     status_ = locTr(localization_, QStringLiteral("vr.status.fmt")).arg(generatedAt_.toString(QStringLiteral("HH:mm:ss")));
     emit dataChanged();
 }
@@ -704,36 +756,104 @@ void ValuationResearchController::rebuildAggregates()
 
 void ValuationResearchController::rebuildResearchAndThesis()
 {
-    auto* loc = localization_.data();
-    researchRows_ = {
-        QVariantMap{{"title", QStringLiteral(u"DCF 估值假设")},
-                    {"detail", assumptionSummary()},
-                    {"tag", QStringLiteral("DCF")},
-                    {"evidence", QStringLiteral(u"运行时可由配置中心调节")}, {"tone", "blue"}},
-        QVariantMap{{"title", QStringLiteral(u"评分公式（透明权重）")},
-                    {"detail", QStringLiteral(u"30% 安全边际 + 20% PE 分位 + 20% FCF 质量 + 15% ROE + 15% ROIC")},
-                    {"tag", QStringLiteral(u"评分")},
-                    {"evidence", QStringLiteral(u"权重写在 valuation_research_provider.py")}, {"tone", "green"}},
-        QVariantMap{{"title", QStringLiteral(u"动作判定")},
-                    {"detail", QStringLiteral(u"安全边际≥15% 且评分≥75 → 加仓；安全边际≤-12% 或评分≤40 → 卖出；其余跟进/转仓")},
-                    {"tag", QStringLiteral(u"动作")},
-                    {"evidence", QStringLiteral(u"非投资建议")}, {"tone", "amber"}},
-        QVariantMap{{"title", QStringLiteral(u"数据来源")},
-                    {"detail", QStringLiteral(u"A 股财务来自 AKShare stock_financial_abstract，行情来自腾讯 qt.gtimg.cn；港股 / 美股财务通过 AKShare 东财端口")},
-                    {"tag", QStringLiteral(u"真实")},
-                    {"evidence", QStringLiteral(u"无 LLM 生成数据")}, {"tone", "blue"}}
+    // Group the latest valuation rows by suggested action so the
+    // "Research files" panel becomes a per-symbol action list rather than
+    // a fixed methodology blurb. The "Investment thesis" panel below
+    // turns into a 5-step concrete playbook tied to the same data.
+    QStringList addList, followList, rotateList, sellList;
+    for (const QVariant& v : valuationRows_)
+    {
+        const QVariantMap m = v.toMap();
+        const QString action = m.value("action").toString();
+        const QString name = m.value("name").toString();
+        const QString display = m.value("displayCode").toString();
+        const double margin = m.value("margin").toDouble();
+        const double price = m.value("lastPrice").toDouble();
+        const double fair = m.value("fairValue").toDouble();
+        const double pe = m.value("pe").toDouble();
+        const double roe = m.value("roe").toDouble();
+        const double score = m.value("compositeScore").toDouble();
+        const QString meth = m.value("methodology").toString();
+        const bool isFinancial = (meth == QStringLiteral("PE multiplier"));
+        QString line = QStringLiteral("%1 %2  现价 %3 / 合理 %4 / 边际 %5%6%  PE %7  ROE %8%  评分 %9")
+            .arg(display, name)
+            .arg(price, 0, 'f', 2)
+            .arg(fair, 0, 'f', 2)
+            .arg(margin >= 0 ? "+" : "")
+            .arg(margin, 0, 'f', 1)
+            .arg(pe, 0, 'f', 2)
+            .arg(roe, 0, 'f', 1)
+            .arg(score, 0, 'f', 1);
+        if (isFinancial) line += QStringLiteral(u"（金融股按 12×TTM EPS 锚定）");
+        if (action == QStringLiteral(u"加仓")) addList.append(line);
+        else if (action == QStringLiteral(u"卖出")) sellList.append(line);
+        else if (action == QStringLiteral(u"转仓")) rotateList.append(line);
+        else followList.append(line);
+    }
+
+    auto joinDetail = [](const QStringList& xs) {
+        if (xs.isEmpty()) return QStringLiteral(u"暂无入选标的");
+        return xs.join(QStringLiteral("\n"));
     };
 
+    researchRows_.clear();
+    researchRows_.append(QVariantMap{
+        {"title", QStringLiteral(u"加仓机会（安全边际≥15% 且评分≥75）")},
+        {"detail", joinDetail(addList)},
+        {"tag", QString::number(addList.size())},
+        {"evidence", QStringLiteral(u"分批建仓，单笔不超过组合 5%")},
+        {"tone", "green"}
+    });
+    researchRows_.append(QVariantMap{
+        {"title", QStringLiteral(u"跟进观察（合理价附近，等待回调）")},
+        {"detail", joinDetail(followList)},
+        {"tag", QString::number(followList.size())},
+        {"evidence", QStringLiteral(u"现价跌破买入线后再考虑入手")},
+        {"tone", "blue"}
+    });
+    researchRows_.append(QVariantMap{
+        {"title", QStringLiteral(u"转仓提醒（基本面或安全边际下滑）")},
+        {"detail", joinDetail(rotateList)},
+        {"tag", QString::number(rotateList.size())},
+        {"evidence", QStringLiteral(u"考虑替换为更高安全边际或更高质量的标的")},
+        {"tone", "amber"}
+    });
+    researchRows_.append(QVariantMap{
+        {"title", QStringLiteral(u"卖出警告（已超合理价 12% 或评分≤40）")},
+        {"detail", joinDetail(sellList)},
+        {"tag", QString::number(sellList.size())},
+        {"evidence", QStringLiteral(u"突破卖出线 (合理价×%1) 后建议分批减仓")
+            .arg(sellMultiplier_, 0, 'f', 2)},
+        {"tone", "red"}
+    });
+
+    // Five-step concrete playbook keyed off the actual data, not generic prose.
+    const int addCount = addList.size();
+    const int sellCount = sellList.size();
+    const QString assumptionLine = assumptionSummary();
     thesisRows_ = {
-        QVariantMap{{"step", "1"}, {"title", locTr(loc, QStringLiteral("vr.thesis.business.title"))},
-                    {"detail", locTr(loc, QStringLiteral("vr.thesis.business.detail"))},
-                    {"evidence", locTr(loc, QStringLiteral("vr.thesis.business.evidence"))}},
-        QVariantMap{{"step", "2"}, {"title", locTr(loc, QStringLiteral("vr.thesis.valuation.title"))},
-                    {"detail", locTr(loc, QStringLiteral("vr.thesis.valuation.detail"))},
-                    {"evidence", locTr(loc, QStringLiteral("vr.thesis.valuation.evidence"))}},
-        QVariantMap{{"step", "3"}, {"title", locTr(loc, QStringLiteral("vr.thesis.invalidation.title"))},
-                    {"detail", locTr(loc, QStringLiteral("vr.thesis.invalidation.detail"))},
-                    {"evidence", locTr(loc, QStringLiteral("vr.thesis.invalidation.evidence"))}},
+        QVariantMap{{"step", "1"},
+            {"title", QStringLiteral(u"先看安全边际均值")},
+            {"detail", QStringLiteral(u"顶部「安全边际均值」卡 ≥+30% 才适合主动加仓；<0% 表示组合整体偏贵，应降低仓位。")},
+            {"evidence", QStringLiteral(u"组合层面纪律线")}},
+        QVariantMap{{"step", "2"},
+            {"title", QStringLiteral(u"按动作筛选行动清单")},
+            {"detail", QStringLiteral(u"上方「加仓机会」中目前有 %1 支；「卖出警告」中有 %2 支。先动卖出，后动加仓。")
+                .arg(addCount).arg(sellCount)},
+            {"evidence", QStringLiteral(u"先减仓再加仓，避免被套")}},
+        QVariantMap{{"step", "3"},
+            {"title", QStringLiteral(u"对每只目标标的做三道检查")},
+            {"detail", QStringLiteral(u"① ROE ≥15% 且连续 3 年增长；② FCF 质量 ≥80（净利润有现金流支持）；③ PE 不在历史 70% 分位以上。三项都过才进场。")},
+            {"evidence", QStringLiteral(u"质量+估值双重过滤")}},
+        QVariantMap{{"step", "4"},
+            {"title", QStringLiteral(u"分批入场，控制单笔仓位")},
+            {"detail", QStringLiteral(u"低于买入线 = 合理价×%1 才出手；单笔 ≤ 组合 5%。再跌 10% 加第二笔，避免一次性满仓被套。")
+                .arg(buyMultiplier_, 0, 'f', 2)},
+            {"evidence", QStringLiteral(u"现行 DCF 假设：%1").arg(assumptionLine)}},
+        QVariantMap{{"step", "5"},
+            {"title", QStringLiteral(u"持有期复盘（每月一次）")},
+            {"detail", QStringLiteral(u"评分跌破 60、安全边际转负、ROE 连续 2 个季度下滑——任一触发即重新评估持仓，不要因「已经亏了」拒绝离场。")},
+            {"evidence", QStringLiteral(u"失效条件优先于持有信念")}}
     };
 }
 
