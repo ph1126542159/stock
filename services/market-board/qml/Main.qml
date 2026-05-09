@@ -329,14 +329,101 @@ ApplicationWindow {
             })
         }
 
-        fundLookthroughRows = [
-            { title: "基金重仓行业", value: selectedKind === "fund" ? localizationController.trCn(marketBoardController.selectedAssetCategory) : "请选择基金", action: selectedKind === "fund" ? "查看赛道风险" : "先选基金", score: selectedKind === "fund" ? selectedScore : 0, detail: selectedKind === "fund" ? "已显示基金赛道，行业穿透需接入季报持仓。" : "在价值投资榜选择基金后查看。", status: selectedKind === "fund" ? scoreStatus(selectedScore) : "warn", source: "当前基金信息", metrics: [metric("基金", selectedKind === "fund" ? selectedName : "未选"), metric("赛道", selectedKind === "fund" ? localizationController.trCn(marketBoardController.selectedAssetCategory) : "未选"), metric(localizationController.tr("mb.label.valueScore"), selectedKind === "fund" ? selectedScore.toFixed(1) : "-")] },
-            { title: "重仓股票", value: "待接入真实季报持仓", action: "不伪造持仓", score: 0, detail: "接入后展示名称、涨跌幅、持仓占比、较上季度变化，并联动实时涨跌幅。", status: "warn", source: "待接入基金季报", metrics: [metric("前十持仓", "待接入"), metric(localizationController.tr("mb.col.change"), "待接入"), metric("季度变化", "待接入")] },
-            { title: "持仓集中度", value: "待接入", action: "识别抱团风险", score: 0, detail: "前十重仓占比 > 60% 记为集中，第一大重仓 > 10% 提示单一标的风险。", status: "warn", source: "待接入基金季报", metrics: [metric("前十占比", "待接入"), metric("第一重仓", "待接入"), metric("风险等级", "待接入")] },
-            { title: "季度变化", value: "待接入", action: "识别调仓方向", score: 0, detail: "比较本季度与上季度加仓、减仓、新进、退出，用于判断基金经理最新意图。", status: "warn", source: "待接入基金季报", metrics: [metric("加仓", "待接入"), metric("减仓", "待接入"), metric("新进/退出", "待接入")] },
-            { title: "基金风格漂移", value: selectedKind === "fund" ? "待持仓验证" : "请选择基金", action: "检查一致性", score: selectedKind === "fund" ? boundedScore(selectedScore * 0.7) : 0, detail: "基金名称/赛道与真实重仓行业偏离过大时提示风格漂移风险。", status: selectedKind === "fund" ? "neutral" : "warn", source: "当前基金 + 待接入季报", metrics: [metric("申明赛道", selectedKind === "fund" ? localizationController.trCn(marketBoardController.selectedAssetCategory) : "-"), metric("真实行业", "待接入"), metric("漂移", "待计算")] },
-            { title: "重仓股实时冲击", value: "待穿透后计算", action: "联动行情", score: 0, detail: "前十重仓股票接入后，会按实时涨跌幅和持仓占比计算基金当日冲击。", status: "warn", source: "待接入基金持仓 + 实时行情", metrics: [metric("权重涨跌", "待接入"), metric("贡献", "待接入"), metric("风险股", "待接入")] }
-        ]
+        // Fund look-through: build from real fundHoldingsSnapshot when the
+        // user has selected a fund (in 价值投资榜). Falls back to a clear
+        // pending message otherwise.
+        const holdings = marketBoardController.fundHoldingsSnapshot || {}
+        const topHoldings = holdings.topHoldings || []
+        const industries = holdings.industryAllocation || []
+        const conc = holdings.concentration || {}
+        fundLookthroughRows = []
+
+        const declaredCategory = localizationController.trCn(marketBoardController.selectedAssetCategory) || ""
+
+        if (selectedKind !== "fund") {
+            fundLookthroughRows.push({
+                title: "请在价值投资榜选择一只基金",
+                value: "未选择基金",
+                action: "去选择",
+                score: 0,
+                detail: "切到价值投资榜，选中任意基金后再回来，本页会自动加载它的重仓股和行业配置。",
+                status: "warn",
+                source: "价值投资榜",
+                metrics: [metric("基金", "未选"), metric("代码", "-"), metric("数据", "-")]
+            })
+        } else if (topHoldings.length === 0) {
+            fundLookthroughRows.push({
+                title: "正在抓取基金重仓股",
+                value: marketBoardController.fundHoldingsStatus || "AKShare 季报数据",
+                action: "等待季报",
+                score: 0,
+                detail: "首次抓取约需 3-5 秒；如失败请稍后再切回该基金触发重试。",
+                status: "neutral",
+                source: marketBoardController.fundHoldingsStatus || "akshare",
+                metrics: [metric("基金", selectedName), metric("代码", marketBoardController.selectedAssetCode || "-"), metric("赛道", declaredCategory)]
+            })
+        } else {
+            // Top-3 holdings as separate cards
+            for (let hi = 0; hi < Math.min(3, topHoldings.length); ++hi) {
+                const h = topHoldings[hi]
+                fundLookthroughRows.push({
+                    title: "重仓 #" + h.rank + "  " + h.name,
+                    value: Number(h.weightPct).toFixed(2) + "% 占净值",
+                    action: h.weightPct > 5 ? "单一标的较重" : "结构合理",
+                    score: boundedScore(60 + (5 - h.weightPct) * 4),
+                    detail: "代码 " + h.code + "，最近季报披露持仓市值 " + Number(h.marketValueWan).toFixed(1) + " 万元。",
+                    status: h.weightPct > 8 ? "warn" : "good",
+                    source: "AKShare 基金季报",
+                    metrics: [metric("代码", h.code), metric("占比", Number(h.weightPct).toFixed(2) + "%"), metric("市值", Number(h.marketValueWan).toFixed(1) + "万")]
+                })
+            }
+            // Top-10 summary row
+            const topNames = topHoldings.map(function(h) { return h.name }).slice(0, 5).join(" / ")
+            fundLookthroughRows.push({
+                title: "前十重仓概览",
+                value: "前十占 " + Number(conc.topTenPct || 0).toFixed(1) + "%",
+                action: (conc.topTenPct || 0) > 60 ? "高集中度" : "分散合理",
+                score: boundedScore(100 - Math.max(0, (conc.topTenPct || 0) - 40)),
+                detail: "前 5 名: " + topNames + (topHoldings.length > 5 ? " ..." : ""),
+                status: (conc.topTenPct || 0) > 70 ? "danger" : ((conc.topTenPct || 0) > 50 ? "warn" : "good"),
+                source: "AKShare 基金季报",
+                metrics: [metric("第一重仓", Number(conc.firstHoldingPct || 0).toFixed(2) + "%"), metric("前十合计", Number(conc.topTenPct || 0).toFixed(1) + "%"), metric("数据日期", holdings.asOf || "-")]
+            })
+            // Top industry row
+            if (industries.length > 0) {
+                const topInd = industries[0]
+                const indNames = industries.slice(0, 3).map(function(i) { return i.name + " " + Number(i.weightPct).toFixed(0) + "%" }).join("  ")
+                fundLookthroughRows.push({
+                    title: "行业配置",
+                    value: topInd.name + " " + Number(topInd.weightPct).toFixed(1) + "%",
+                    action: (topInd.weightPct || 0) > 50 ? "行业集中度高" : "行业均衡",
+                    score: boundedScore(100 - Math.max(0, (topInd.weightPct || 0) - 35)),
+                    detail: "前三行业: " + indNames,
+                    status: (topInd.weightPct || 0) > 60 ? "warn" : "good",
+                    source: "AKShare 基金季报",
+                    metrics: [metric("第一行业", Number(topInd.weightPct || 0).toFixed(1) + "%"), metric("行业数", conc.industryCount || industries.length), metric("赛道一致", declaredCategory ? "✓" : "?")]
+                })
+            }
+            // Style drift row
+            const drift = (function() {
+                if (!declaredCategory) return "无赛道声明"
+                if (industries.length === 0) return "等待行业数据"
+                const topIndName = industries[0].name
+                if (declaredCategory.indexOf(topIndName) >= 0 || topIndName.indexOf(declaredCategory) >= 0) return "一致"
+                if (declaredCategory.indexOf("混合") >= 0 || declaredCategory.indexOf("指数") >= 0) return "可接受"
+                return "可能漂移"
+            })()
+            fundLookthroughRows.push({
+                title: "风格一致性",
+                value: drift,
+                action: drift === "可能漂移" ? "复核基金经理意图" : "继续观察",
+                score: drift === "一致" ? 80 : (drift === "可接受" ? 65 : 45),
+                detail: "申明赛道 \"" + declaredCategory + "\"" + (industries.length > 0 ? "，实际重仓行业 \"" + industries[0].name + "\"" : "") + "。漂移可能是基金经理调仓窗口期，也可能是风格变更。",
+                status: drift === "可能漂移" ? "warn" : (drift === "一致" ? "good" : "neutral"),
+                source: "声明 vs 实际",
+                metrics: [metric("声明赛道", declaredCategory || "-"), metric("实际首位", industries.length > 0 ? industries[0].name : "-"), metric("评估", drift)]
+            })
+        }
 
         riskAlertRows = domesticIndexRows.slice(0, 6).map(function(row) {
             const risk = row.risk || indexRiskLabel(row.change, row.breadth)
@@ -608,9 +695,21 @@ ApplicationWindow {
         target: marketBoardController
         function onSelectedAssetChanged() {
             window.rebuildInvestmentReferencePages()
+            // Fund look-through: when the user picks a fund in the value-
+            // investment board, kick off an akshare fetch for its top-10
+            // holdings + industry allocation. Stocks don't trigger this.
+            if (marketBoardController.selectedAssetKind === "fund") {
+                const code = marketBoardController.selectedAssetCode || ""
+                if (code.length >= 5) {
+                    marketBoardController.requestFundHoldings(code)
+                }
+            }
         }
         function onFreeDataSnapshotChanged() {
             window.applyFreeDataProviderSnapshot(marketBoardController.freeDataSnapshot)
+        }
+        function onFundHoldingsChanged() {
+            window.rebuildInvestmentReferencePages()
         }
     }
 

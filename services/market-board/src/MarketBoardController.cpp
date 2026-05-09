@@ -418,6 +418,9 @@ MarketBoardController::MarketBoardController(
     usHistoryProviderScriptPath_ = resolve_free_data_provider_script(
         configPath_,
         configuration_->getString("usHistory.provider.script", "../../tools/us_history_provider.py"));
+    fundHoldingsScriptPath_ = resolve_free_data_provider_script(
+        configPath_,
+        configuration_->getString("fundHoldings.provider.script", "../../tools/fund_holdings_provider.py"));
     telemetry_.logger().information(
         QStringLiteral("Python interpreter: %1; value-board script: %2; free-data script: %3")
             .arg(valueBoardProviderCommand_, valueBoardProviderScriptPath_, freeDataProviderScriptPath_)
@@ -649,6 +652,119 @@ QVariantMap MarketBoardController::freeDataSnapshot() const
 QString MarketBoardController::freeDataStatus() const
 {
     return freeDataStatus_;
+}
+
+QVariantMap MarketBoardController::fundHoldingsSnapshot() const
+{
+    return fundHoldingsSnapshot_;
+}
+
+QString MarketBoardController::fundHoldingsStatus() const
+{
+    return fundHoldingsStatus_;
+}
+
+void MarketBoardController::requestFundHoldings(const QString& fundCode)
+{
+    const QString trimmed = fundCode.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return;
+    }
+    // Skip if we already have this code's data fresh in memory.
+    if (fundHoldingsSnapshot_.value(QStringLiteral("fundCode")).toString() == trimmed &&
+        fundHoldingsSnapshot_.value(QStringLiteral("topHoldings")).toList().size() > 0)
+    {
+        return;
+    }
+    if (fundHoldingsRequestInFlight_ && fundHoldingsRequestedCode_ == trimmed)
+    {
+        return;
+    }
+    if (valueBoardProviderCommand_.isEmpty() || fundHoldingsScriptPath_.isEmpty())
+    {
+        fundHoldingsStatus_ = QStringLiteral(u"基金穿透：未配置抓取脚本");
+        emit fundHoldingsChanged();
+        return;
+    }
+    if (!QFileInfo::exists(fundHoldingsScriptPath_))
+    {
+        fundHoldingsStatus_ = QStringLiteral(u"基金穿透：脚本未找到 %1").arg(fundHoldingsScriptPath_);
+        emit fundHoldingsChanged();
+        return;
+    }
+
+    fundHoldingsRequestInFlight_ = true;
+    fundHoldingsRequestedCode_ = trimmed;
+    fundHoldingsStatus_ = QStringLiteral(u"基金穿透：抓取 %1 重仓股 ...").arg(trimmed);
+    emit fundHoldingsChanged();
+
+    auto* process = new QProcess(this);
+    QStringList args;
+    if (valueBoardProviderCommand_ == QStringLiteral("py")) args << QStringLiteral("-3");
+    args << fundHoldingsScriptPath_
+         << QStringLiteral("--fund") << trimmed
+         << QStringLiteral("--json");
+    process->setWorkingDirectory(QFileInfo(fundHoldingsScriptPath_).absolutePath());
+    process->setProcessChannelMode(QProcess::SeparateChannels);
+
+    telemetry_.logger().information(
+        QStringLiteral("Fund holdings provider: %1 %2 (fund=%3)")
+            .arg(valueBoardProviderCommand_, fundHoldingsScriptPath_, trimmed)
+            .toStdString());
+
+    QPointer<MarketBoardController> guard(this);
+    connect(process, &QProcess::finished, this,
+        [this, guard, process, trimmed](int exitCode, QProcess::ExitStatus)
+    {
+        const QString out = QString::fromUtf8(process->readAllStandardOutput());
+        const QString err = QString::fromUtf8(process->readAllStandardError());
+        process->deleteLater();
+        if (!guard) return;
+
+        fundHoldingsRequestInFlight_ = false;
+        if (exitCode != 0)
+        {
+            fundHoldingsStatus_ = QStringLiteral(u"基金穿透：抓取失败 %1").arg(err.left(120));
+            emit fundHoldingsChanged();
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(out.toUtf8(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject())
+        {
+            fundHoldingsStatus_ = QStringLiteral(u"基金穿透：解析失败 %1").arg(parseError.errorString());
+            emit fundHoldingsChanged();
+            return;
+        }
+        const QJsonArray funds = doc.object().value(QStringLiteral("funds")).toArray();
+        if (funds.isEmpty() || !funds.first().isObject())
+        {
+            fundHoldingsStatus_ = QStringLiteral(u"基金穿透：返回为空");
+            emit fundHoldingsChanged();
+            return;
+        }
+        const QJsonObject snap = funds.first().toObject();
+        fundHoldingsSnapshot_ = snap.toVariantMap();
+        fundHoldingsStatus_ = QStringLiteral(u"基金穿透：%1（%2）")
+            .arg(snap.value(QStringLiteral("fundCode")).toString(),
+                 snap.value(QStringLiteral("asOf")).toString());
+        emit fundHoldingsChanged();
+    });
+
+    process->start(valueBoardProviderCommand_, args);
+    if (!process->waitForStarted(3000))
+    {
+        process->deleteLater();
+        fundHoldingsRequestInFlight_ = false;
+        fundHoldingsStatus_ = QStringLiteral(u"基金穿透：启动脚本失败");
+        emit fundHoldingsChanged();
+        return;
+    }
+    QTimer::singleShot(60 * 1000, process, [process]()
+    {
+        if (process->state() != QProcess::NotRunning) process->kill();
+    });
 }
 
 void MarketBoardController::start()

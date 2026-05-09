@@ -54,6 +54,8 @@ class MarketBoardController final : public QObject
     Q_PROPERTY(QVariantList selectedFundTopHoldings READ selectedFundTopHoldings NOTIFY selectedAssetChanged)
     Q_PROPERTY(QVariantMap freeDataSnapshot READ freeDataSnapshot NOTIFY freeDataSnapshotChanged)
     Q_PROPERTY(QString freeDataStatus READ freeDataStatus NOTIFY freeDataSnapshotChanged)
+    Q_PROPERTY(QVariantMap fundHoldingsSnapshot READ fundHoldingsSnapshot NOTIFY fundHoldingsChanged)
+    Q_PROPERTY(QString fundHoldingsStatus READ fundHoldingsStatus NOTIFY fundHoldingsChanged)
 
 public:
     enum Page
@@ -98,6 +100,9 @@ public:
     QVariantList selectedFundTopHoldings() const;
     QVariantMap freeDataSnapshot() const;
     QString freeDataStatus() const;
+    QVariantMap fundHoldingsSnapshot() const;
+    QString fundHoldingsStatus() const;
+    Q_INVOKABLE void requestFundHoldings(const QString& fundCode);
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void openValueBoard(int institutionRow);
@@ -118,6 +123,7 @@ signals:
     void valueStatusChanged();
     void selectedAssetChanged();
     void freeDataSnapshotChanged();
+    void fundHoldingsChanged();
 
 private:
     void initializeDatabase();
@@ -243,6 +249,11 @@ private:
     QHash<QString, QVector<QPair<qint64, double>>> usQuoteHistory_;
     QTimer* freeDataRefreshTimer_ = nullptr;
     QVariantMap freeDataSnapshot_;
+    QString fundHoldingsScriptPath_;
+    QVariantMap fundHoldingsSnapshot_;
+    QString fundHoldingsStatus_;
+    QString fundHoldingsRequestedCode_;
+    bool fundHoldingsRequestInFlight_ = false;
     QString freeDataStatus_;
     bool freeDataRequestInFlight_ = false;
     bool institutionLoadedFromStorage_ = false;
