@@ -2107,76 +2107,74 @@ ApplicationWindow {
                             }
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.flow")
-                                subtitleText: localizationController.tr("mb.section.flow.subtitle")
-                                rows: window.capitalFlowRows
-                            }
+                        // Each StackLayout child must request fillWidth/fillHeight
+                        // explicitly, otherwise the Item wrapper collapses to a
+                        // 0x0 size and the ReferencePage anchored inside it
+                        // never renders -- which is exactly why tabs 资金流向 /
+                        // 行业轮动 / 估值温度 / 财报日历 / 基金穿透 / 风险预警 /
+                        // 组合诊断 / 交易计划 looked completely blank.
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.flow")
+                            subtitleText: localizationController.tr("mb.section.flow.subtitle")
+                            rows: window.capitalFlowRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.rotation")
-                                subtitleText: localizationController.tr("mb.section.rotation.subtitle")
-                                rows: window.rotationRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.rotation")
+                            subtitleText: localizationController.tr("mb.section.rotation.subtitle")
+                            rows: window.rotationRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.valuation")
-                                subtitleText: localizationController.tr("mb.section.valuation.subtitle")
-                                rows: window.valuationRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.valuation")
+                            subtitleText: localizationController.tr("mb.section.valuation.subtitle")
+                            rows: window.valuationRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.earnings")
-                                subtitleText: localizationController.tr("mb.section.earnings.subtitle")
-                                rows: window.earningsRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.earnings")
+                            subtitleText: localizationController.tr("mb.section.earnings.subtitle")
+                            rows: window.earningsRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.fund")
-                                subtitleText: localizationController.tr("mb.section.fund.subtitle")
-                                rows: window.fundLookthroughRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.fund")
+                            subtitleText: localizationController.tr("mb.section.fund.subtitle")
+                            rows: window.fundLookthroughRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.risk")
-                                subtitleText: localizationController.tr("mb.section.risk.subtitle")
-                                rows: window.riskAlertRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.risk")
+                            subtitleText: localizationController.tr("mb.section.risk.subtitle")
+                            rows: window.riskAlertRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.diag")
-                                subtitleText: localizationController.tr("mb.section.diag.subtitle")
-                                rows: window.portfolioDiagnosticRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.diag")
+                            subtitleText: localizationController.tr("mb.section.diag.subtitle")
+                            rows: window.portfolioDiagnosticRows
                         }
 
-                        Item {
-                            ReferencePage {
-                                anchors.fill: parent
-                                titleText: localizationController.tr("mb.section.plans")
-                                subtitleText: localizationController.tr("mb.section.plans.subtitle")
-                                rows: window.tradePlanRows
-                            }
+                        ReferencePage {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            titleText: localizationController.tr("mb.section.plans")
+                            subtitleText: localizationController.tr("mb.section.plans.subtitle")
+                            rows: window.tradePlanRows
                         }
                     }
                 }

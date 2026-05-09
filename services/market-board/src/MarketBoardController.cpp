@@ -792,6 +792,26 @@ void MarketBoardController::start()
     }
 
     startFreeDataProvider();
+
+    // Auto-bootstrap a default selection so all dependent ReferencePage tabs
+    // (Capital Flow / Valuation / Earnings / Fund Look-through / Risk /
+    // Diagnostics / Trade Plans) have non-empty data on first paint instead
+    // of waiting for the user to manually drill in via the institution
+    // double-click flow. We pick row 0 (招商银行财富 by current ordering)
+    // and prime its valuation board, which in turn fires
+    // setSelectedAsset(funds[0]) -> selectedAssetChanged -> QML rebuild.
+    QTimer::singleShot(0, this, [this]()
+    {
+        if (selectedInstitutionId_.isEmpty() && institutionModel_.rowCount() > 0)
+        {
+            openValueBoard(0);
+            // Drop the user back on the institution-board page so the very
+            // first thing they see is still the entry point, but the
+            // downstream tabs are no longer empty.
+            currentPage_ = InstitutionBoardPage;
+            emit currentPageChanged();
+        }
+    });
 }
 
 void MarketBoardController::setRealtimeActive(bool active)
