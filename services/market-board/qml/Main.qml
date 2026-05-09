@@ -484,9 +484,79 @@ ApplicationWindow {
         if (prior.length === 12 && max < 200 && price > 200) {
             prior = []
         }
-        const nextSeries = prior.slice(Math.max(0, prior.length - 31))
+        // Only append when the price actually moved or every ~60 ticks. Out
+        // of trading hours the upstream snapshot price stops changing, so
+        // pushing the same value every second floods the buffer with a flat
+        // tail and every index card ends up rendering as the same horizontal
+        // line. By only adding genuine moves we keep the seeded daily-K
+        // history visible while live ticks add tiny micro-detail during
+        // session hours.
+        const last = prior.length > 0 ? Number(prior[prior.length - 1]) : NaN
+        const moved = !isFinite(last) || Math.abs(price - last) > 0.0001
+        if (!moved && prior.length >= 2) {
+            return prior
+        }
+        const nextSeries = prior.slice(Math.max(0, prior.length - 47))
         nextSeries.push(price)
         return nextSeries.length >= 2 ? nextSeries : [price, price]
+    }
+
+    // Map UI code -> Tencent daily-K secid prefix
+    function tencentKlineSecid(code) {
+        if (code === "000001.SH") return "sh000001"
+        if (code === "399001.SZ") return "sz399001"
+        if (code === "399006.SZ") return "sz399006"
+        if (code === "000688.SH") return "sh000688"
+        if (code === "000300.SH") return "sh000300"
+        if (code === "000905.SH") return "sh000905"
+        if (code === "000985.SH") return "sh000985"
+        if (code === "HSTECH.HK") return "hkHSTECH"
+        return ""
+    }
+
+    // Backfill the past ~30 trading days of close prices for one index so the
+    // sparkline starts with a real shape (different per index) instead of a
+    // flat horizontal line until the next live tick arrives.
+    function backfillDailyKline(uiCode) {
+        const secid = tencentKlineSecid(uiCode)
+        if (!secid) return
+        const request = new XMLHttpRequest()
+        request.onreadystatechange = function() {
+            if (request.readyState !== XMLHttpRequest.DONE) return
+            if (request.status < 200 || request.status >= 300) return
+            try {
+                const payload = JSON.parse(request.responseText)
+                const stock = payload && payload.data ? payload.data[secid] : null
+                if (!stock) return
+                const rows = stock.day || stock.qfqday || []
+                const closes = []
+                for (let i = 0; i < rows.length; ++i) {
+                    const price = Number(rows[i][2])
+                    if (isFinite(price) && price > 0) closes.push(price)
+                }
+                if (closes.length === 0) return
+                const nextRows = domesticIndexRows.slice()
+                for (let r = 0; r < nextRows.length; ++r) {
+                    if (nextRows[r].code === uiCode) {
+                        // Tail-cap so the buffer matches what applyRealIndexQuote uses.
+                        nextRows[r].series = closes.slice(Math.max(0, closes.length - 47))
+                        break
+                    }
+                }
+                domesticIndexRows = nextRows
+            } catch (e) {
+                // ignore; live ticks will still rebuild the curve over time
+            }
+        }
+        // Plain http: same TLS-handshake reason as the other Tencent / Eastmoney calls.
+        request.open("GET", "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=" + secid + ",day,,,30,")
+        request.send()
+    }
+
+    function backfillAllDailyKlines() {
+        for (let i = 0; i < domesticIndexRows.length; ++i) {
+            backfillDailyKline(domesticIndexRows[i].code)
+        }
     }
 
     function applyRealIndexQuote(code, name, price, changePct, amount, upCount, downCount, flatCount) {
@@ -686,6 +756,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         rebuildInvestmentReferencePages()
+        backfillAllDailyKlines()
         refreshDomesticIndexes()
         fetchEastmoneySectorMoneyFlow()
         fetchCninfoAnnouncements()
