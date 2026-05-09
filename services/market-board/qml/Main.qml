@@ -1340,8 +1340,10 @@ ApplicationWindow {
         }
     }
 
-    component ReferencePage : Rectangle {
+    component ReferencePage : Item {
         id: refPage
+        implicitHeight: refPageContent.implicitHeight + 32
+        implicitWidth: 600
         required property string titleText
         required property string subtitleText
         property string statusText: domesticIndexStatus
@@ -1364,12 +1366,17 @@ ApplicationWindow {
         ]
         property var displayRows: rows && rows.length > 0 ? rows : fallbackRows
 
-        radius: 10
-        color: theme.panel
-        border.color: theme.border
-        clip: true
+        // Inner background panel
+        Rectangle {
+            anchors.fill: parent
+            radius: 10
+            color: theme.panel
+            border.color: theme.border
+            clip: true
+        }
 
         ColumnLayout {
+            id: refPageContent
             anchors.fill: parent
             anchors.margins: 16
             spacing: 14
@@ -1419,8 +1426,13 @@ ApplicationWindow {
             }
 
             GridLayout {
+                id: cardGrid
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.preferredHeight: {
+                    const cols = cardGrid.columns
+                    const rows = Math.ceil(refPage.displayRows.length / Math.max(1, cols))
+                    return rows * 236 + Math.max(0, rows - 1) * 12
+                }
                 columns: width >= 1200 ? 4 : (width >= 840 ? 3 : 2)
                 rowSpacing: 12
                 columnSpacing: 12
@@ -1431,6 +1443,7 @@ ApplicationWindow {
                     ReferenceCard {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 236
+                        Layout.minimumHeight: 236
                         titleText: modelData.title
                         valueText: modelData.value
                         detailText: modelData.detail
@@ -1826,7 +1839,7 @@ ApplicationWindow {
                             Item {
                                 id: sec_usWatch
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
 
                                 Rectangle {
                                     anchors.fill: parent
@@ -1906,7 +1919,11 @@ ApplicationWindow {
                             Item {
                                 id: sec_indices
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: indexGrid.implicitHeight + 80
+                                Layout.preferredHeight: {
+                                    const cols = indexGrid.columns
+                                    const rows = Math.ceil(window.domesticIndexRows.length / Math.max(1, cols))
+                                    return rows * 220 + Math.max(0, rows - 1) * 10 + 90
+                                }
 
                                 Rectangle {
                                     anchors.fill: parent
@@ -2023,7 +2040,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_flow
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "4. " + localizationController.tr("mb.section.flow")
                                 subtitleText: localizationController.tr("mb.section.flow.subtitle")
                                 rows: window.capitalFlowRows
@@ -2031,7 +2048,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_rotation
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "5. " + localizationController.tr("mb.section.rotation")
                                 subtitleText: localizationController.tr("mb.section.rotation.subtitle")
                                 rows: window.rotationRows
@@ -2039,7 +2056,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_valuation
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "6. " + localizationController.tr("mb.section.valuation")
                                 subtitleText: localizationController.tr("mb.section.valuation.subtitle")
                                 rows: window.valuationRows
@@ -2047,7 +2064,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_earnings
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "7. " + localizationController.tr("mb.section.earnings")
                                 subtitleText: localizationController.tr("mb.section.earnings.subtitle")
                                 rows: window.earningsRows
@@ -2055,7 +2072,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_fund
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "8. " + localizationController.tr("mb.section.fund")
                                 subtitleText: localizationController.tr("mb.section.fund.subtitle")
                                 rows: window.fundLookthroughRows
@@ -2063,7 +2080,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_risk
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "9. " + localizationController.tr("mb.section.risk")
                                 subtitleText: localizationController.tr("mb.section.risk.subtitle")
                                 rows: window.riskAlertRows
@@ -2071,7 +2088,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_diag
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "10. " + localizationController.tr("mb.section.diag")
                                 subtitleText: localizationController.tr("mb.section.diag.subtitle")
                                 rows: window.portfolioDiagnosticRows
@@ -2079,7 +2096,7 @@ ApplicationWindow {
                             ReferencePage {
                                 id: sec_plans
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 540
+                                Layout.preferredHeight: implicitHeight > 0 ? implicitHeight : 540
                                 titleText: "11. " + localizationController.tr("mb.section.plans")
                                 subtitleText: localizationController.tr("mb.section.plans.subtitle")
                                 rows: window.tradePlanRows
